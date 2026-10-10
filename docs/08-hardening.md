@@ -75,9 +75,31 @@ refills continuously. Over the limit:
 Verified live: 64 rapid calls → 62 allowed (60 + refill), 2 refused. Limitation: buckets live in each gateway
 replica's memory; with N replicas the effective limit is up to N×; a shared store (Redis) would make it global.
 
+## 4. One slow upstream must not exhaust the database pool (0.8.1)
+
+`call_tool_as` used to keep its database session open across the upstream call. A session that has run a query
+holds one pooled connection until it commits, and the pool has 15 connections (SQLAlchemy's default 5 + 10
+overflow). Fifteen callers waiting on one slow upstream therefore pinned every connection, and the next request
+of any kind, including `authenticate()` and the readiness probe, blocked until those calls timed out: one slow
+upstream could take the gateway out of its Service. The call now uses one short session for the policy checks,
+none during the upstream call, and another for the audit row; the dashboard's status probe got the same change.
+Regression test: 20 concurrent calls into a slow upstream while a healthy call and a dashboard request must
+answer in under 1.5 s (they waited 2.9 s before the fix).
+
+## 5. Production TLS details (0.8.1)
+
+Two gaps only appear with `ingress.tls.enabled`, which Kind never exercises:
+
+- cert-manager's HTTP-01 solver Pod runs in the `urumi` namespace and was selected by `default-deny`, so Traefik
+  could never reach the challenge and no certificate would ever be issued. `urumi-allow-acme-solver` admits the
+  ingress controller to Pods labelled `acme.cert-manager.io/http01-solver` on port 8089.
+- Traefik keeps serving plain HTTP for a host that also has TLS, so a key sent to `http://app.<domain>/mcp`
+  travelled in cleartext. Two Traefik Middlewares (`templates/ingress-tls.yaml`), attached to every Ingress,
+  redirect HTTP to HTTPS (308) and add `Strict-Transport-Security`.
+
 ## Tests
 
 `services/gateway/tests`: seeded admin-only tool hidden from members; admin-only tool hidden, refused, and audited,
 admins unaffected, members cannot change policies; the assistant only offers a member their tools; per-user tool
-and chat limits (independent buckets, `Retry-After`). 29 tests in total. `scripts/verify_dod.py` adds live checks
+and chat limits (independent buckets, `Retry-After`). 30 tests in total. `scripts/verify_dod.py` adds live checks
 for the tool permission and the gateway's egress.

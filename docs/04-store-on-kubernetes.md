@@ -30,7 +30,7 @@ ConfigMap urumi-store-setup: the setup scripts the Job runs
 | **Headless Service** | `clusterIP: None` gives the database a DNS name without a load-balancing virtual IP — normal for StatefulSets. |
 | **Secret** | Generated once by Helm (`randAlphaNum`); `lookup` keeps the same values on `helm upgrade`; `helm.sh/resource-policy: keep` keeps it after uninstall, because the database files were initialised with those passwords. Production uses `store.existingSecret` instead. |
 | **ConfigMap** | Non-secret files: `files/store-setup.sh`, `files/ensure-api-key.php`. |
-| **Job (Helm hook)** | Runs once to completion after install/upgrade: installs WordPress, Storefront, WooCommerce, sets INR + India, disables "coming soon", enables **Cash on delivery**, creates shop/cart/checkout pages and a sample product, and registers the MCP REST key. Every step checks state first, so re-running is safe. |
+| **Job (Helm hook)** | Runs once to completion after install/upgrade: installs WordPress, Storefront and WooCommerce (versions pinned in `values.yaml`), sets INR + India, disables "coming soon", enables **Cash on delivery**, creates shop/cart/checkout pages and a sample product, and registers the MCP REST key. Every step checks state first, so re-running is safe. |
 | **NetworkPolicy** | Only Pods labelled as WordPress or the setup Job may open MariaDB's port 3306. |
 
 ### Probes, requests, limits

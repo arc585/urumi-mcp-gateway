@@ -29,11 +29,23 @@ wp option update siteurl "$SITE_URL" >/dev/null
 # Pretty permalinks; the image already ships the matching Apache .htaccess rules.
 wp rewrite structure '/%postname%/' >/dev/null
 
-log "Theme and WooCommerce"
-wp theme is-installed storefront || wp theme install storefront
+# Pinned versions from the Helm values: a fresh store gets exactly these; an existing store is moved to them.
+ensure_version() { # ensure_version plugin|theme <name> <version>
+  kind=$1 name=$2 want=$3
+  if ! wp "$kind" is-installed "$name"; then
+    wp "$kind" install "$name" --version="$want"
+  elif [ "$(wp "$kind" get "$name" --field=version)" != "$want" ]; then
+    log "$name $(wp "$kind" get "$name" --field=version) -> $want"
+    wp "$kind" install "$name" --version="$want" --force
+  fi
+}
+log "Theme and WooCommerce (Storefront $STOREFRONT_VERSION, WooCommerce $WC_VERSION)"
+ensure_version theme storefront "$STOREFRONT_VERSION"
 wp theme activate storefront >/dev/null
-wp plugin is-installed woocommerce || wp plugin install woocommerce
+ensure_version plugin woocommerce "$WC_VERSION"
 wp plugin is-active woocommerce || wp plugin activate woocommerce
+# Apply pending WooCommerce database updates after a version change (a no-op when already current).
+wp wc update >/dev/null || log "warning: 'wp wc update' failed; check WooCommerce → Status after a version change"
 
 log "Store settings"
 wp option update woocommerce_currency "$STORE_CURRENCY" >/dev/null

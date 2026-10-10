@@ -89,11 +89,12 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "urumi.labels" (list . "dashboard") | nindent 4 }}
-  {{- /* No cert-manager annotation here: the gateway Ingress for the same host requests the certificate,
-       and both Ingresses reference the same TLS Secret. Two owners would fight over one Certificate. */}}
-  {{- with .Values.ingress.annotations }}
+  {{- /* No cert-manager annotation here (false): the gateway Ingress for the same host requests the
+       certificate, and both Ingresses reference the same TLS Secret. Two owners would fight over one
+       Certificate. The HTTPS-redirect/HSTS middlewares are still attached. */}}
+  {{- with (include "urumi.ingressAnnotations" (list . false)) }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}

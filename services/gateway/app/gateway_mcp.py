@@ -98,40 +98,53 @@ def _first_text(result: CallToolResult) -> str:
 
 
 async def call_tool_as(caller: Caller, name: str, arguments: dict[str, Any], channel: str) -> CallToolResult:
-    """Route one call to its upstream as `caller`, and write exactly one audit row for it."""
+    """Route one call to its upstream as `caller`, and write exactly one audit row for it.
+
+    The database is used in two short sessions, before and after the upstream call, never across it.
+    A session that has run a query keeps one pooled connection until it commits, and the pool holds
+    15 connections by default: a session left open during a (up to 30 s) upstream call would let one
+    slow upstream with 15 callers in flight block every other request, authentication included.
+    """
     started = time.perf_counter()
     occurred_at = now_utc()
     parsed = split_name(name)
     upstream_id, tool_name = parsed if parsed else ("unknown", name)
     upstream_name = upstream_id
-    result: CallToolResult
+    target: UpstreamTarget | None = None
     error: str | None = None
 
-    async with SessionLocal() as session:
-        upstream = await session.get(Upstream, upstream_id) if parsed else None
-        if parsed is None:
-            error = f"Tool name must look like <upstream>{SEPARATOR}<tool>"
-            result = _error_result(error)
-        elif upstream is None or not upstream.enabled:
-            error = f"Upstream '{upstream_id}' is not available (unknown or disabled)"
-            result = _error_result(error)
-        elif not caller.is_admin and await session.get(AdminOnlyTool, (upstream_id, tool_name)):
-            # Hidden from the member's tool list; a direct call by name is refused too.
-            error = f"'{name}' is restricted to admins"
-            result = _error_result(error)
-        elif not (allowance := tool_calls.allow(caller.user_id))[0]:
-            error = f"rate limit exceeded: too many tool calls, retry in {allowance[1]:.0f}s"
-            result = _error_result(error)
-        else:
-            upstream_name = upstream.name
-            try:
-                result = await call_tool(UpstreamTarget.from_model(upstream), tool_name, arguments)
-                if result.is_error:
-                    error = _first_text(result)
-            except UpstreamError as exc:
-                error = str(exc)
-                result = _error_result(f"{upstream.name} is unavailable: {exc}")
+    # 1. Policy checks in one short read-only session, released before any network call.
+    if parsed is None:
+        error = f"Tool name must look like <upstream>{SEPARATOR}<tool>"
+    else:
+        async with SessionLocal() as session:
+            upstream = await session.get(Upstream, upstream_id)
+            if upstream is None or not upstream.enabled:
+                error = f"Upstream '{upstream_id}' is not available (unknown or disabled)"
+            elif not caller.is_admin and await session.get(AdminOnlyTool, (upstream_id, tool_name)):
+                # Hidden from the member's tool list; a direct call by name is refused too.
+                error = f"'{name}' is restricted to admins"
+            else:
+                target = UpstreamTarget.from_model(upstream)
+    if error is None and not (allowance := tool_calls.allow(caller.user_id))[0]:
+        error = f"rate limit exceeded: too many tool calls, retry in {allowance[1]:.0f}s"
 
+    # 2. The upstream call, with no database connection held.
+    if error is not None or target is None:
+        error = error or "upstream could not be resolved"
+        result = _error_result(error)
+    else:
+        upstream_name = target.name
+        try:
+            result = await call_tool(target, tool_name, arguments)
+            if result.is_error:
+                error = _first_text(result)
+        except UpstreamError as exc:
+            error = str(exc)
+            result = _error_result(f"{target.name} is unavailable: {exc}")
+
+    # 3. Exactly one audit row, in its own short session.
+    async with SessionLocal() as session:
         session.add(
             ToolAudit(
                 user_id=caller.user_id,

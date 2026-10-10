@@ -83,14 +83,24 @@ tls:
 {{- end }}
 {{- end -}}
 
-{{/* Annotations shared by every Ingress (for example the cert-manager issuer in production). */}}
+{{/*
+Annotations shared by every Ingress: the operator's own, the HTTPS-redirect and HSTS Middlewares when TLS
+is on (templates/ingress-tls.yaml), and the cert-manager issuer where requested.
+Usage: include "urumi.ingressAnnotations" (list . true)   # true = request the certificate from this Ingress
+*/}}
 {{- define "urumi.ingressAnnotations" -}}
-{{- $root := . -}}
+{{- $root := index . 0 -}}
+{{- $withIssuer := index . 1 -}}
 {{- with $root.Values.ingress.annotations }}
 {{- toYaml . }}
 {{- end }}
-{{- if and $root.Values.ingress.tls.enabled $root.Values.ingress.tls.clusterIssuer }}
+{{- if $root.Values.ingress.tls.enabled }}
+{{- $redirect := include "urumi.componentName" (list $root "redirect-https") }}
+{{- $hsts := include "urumi.componentName" (list $root "hsts") }}
+traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s-%s@kubernetescrd,%s-%s@kubernetescrd" $root.Release.Namespace $redirect $root.Release.Namespace $hsts | quote }}
+{{- if and $withIssuer $root.Values.ingress.tls.clusterIssuer }}
 cert-manager.io/cluster-issuer: {{ $root.Values.ingress.tls.clusterIssuer | quote }}
+{{- end }}
 {{- end }}
 {{- end -}}
 

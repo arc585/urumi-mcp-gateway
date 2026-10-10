@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import Caller, authenticate, extract_key
-from .db import get_session
+from .db import SessionLocal, get_session
 from .models import AdminEvent, AdminOnlyTool, ApiKey, ToolAudit, Upstream, User, now_utc
 from .schemas import (
     AdminEventView,
@@ -382,20 +382,22 @@ async def remove_upstream(
 
 
 @router.get("/upstreams/status", response_model=list[UpstreamStatus])
-async def upstream_status(
-    caller: Caller = Depends(current_caller), session: AsyncSession = Depends(get_session)
-) -> list[UpstreamStatus]:
+async def upstream_status(caller: Caller = Depends(current_caller)) -> list[UpstreamStatus]:
     """Live health of every upstream, checked concurrently (each check has its own timeout).
 
     Members do not see the names of admin-only tools; admins see which tools are restricted.
+    The session is closed before the probes start, so a 5 s health check never pins a pooled
+    connection (same reasoning as call_tool_as).
     """
-    rows = (await session.scalars(select(Upstream).order_by(Upstream.name))).all()
-    restricted = await _restricted(session)
+    async with SessionLocal() as session:
+        rows = (await session.scalars(select(Upstream).order_by(Upstream.name))).all()
+        restricted = await _restricted(session)
+        targets = {row.id: UpstreamTarget.from_model(row) for row in rows}
 
     async def inspect(upstream: Upstream) -> UpstreamStatus:
         if not upstream.enabled:
             return UpstreamStatus(id=upstream.id, name=upstream.name, enabled=False, status="Disabled", tools=[])
-        discovery = await discover_tools(UpstreamTarget.from_model(upstream), use_cache=False)
+        discovery = await discover_tools(targets[upstream.id], use_cache=False)
         hidden = set() if caller.is_admin else set(restricted.get(upstream.id, []))
         return UpstreamStatus(
             id=upstream.id,

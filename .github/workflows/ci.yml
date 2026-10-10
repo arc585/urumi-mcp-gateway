@@ -25,6 +25,12 @@ jobs:
           helm lint deploy/helm/urumi -f deploy/helm/urumi/values-local.yaml
           helm lint deploy/helm/urumi -f deploy/helm/urumi/values-prod.yaml
           helm template urumi deploy/helm/urumi -n urumi -f deploy/helm/urumi/values-prod.yaml > /dev/null
+      - name: Release consistency (production image tags == Chart appVersion)
+        run: |
+          app=$(sed -n 's/^appVersion: "\(.*\)"/\1/p' deploy/helm/urumi/Chart.yaml)
+          tags=$(sed -n 's/^ *tag: "\([^"]*\)".*/\1/p' deploy/helm/urumi/values-prod.yaml | sort -u)
+          echo "appVersion=$app  values-prod tags=$tags"
+          [ "$tags" = "$app" ] || { echo "values-prod.yaml image tags must all equal Chart appVersion"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -56,6 +62,8 @@ jobs:
       - name: Image tag from the git tag (GHCR names must be lowercase)
         id: tag
         run: |
+          app=$(sed -n 's/^appVersion: "\(.*\)"/\1/p' deploy/helm/urumi/Chart.yaml)
+          [ "${GITHUB_REF_NAME#v}" = "$app" ] || { echo "git tag $GITHUB_REF_NAME must be v$app (Chart appVersion)"; exit 1; }
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6

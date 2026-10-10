@@ -117,7 +117,7 @@ revisions 8 ↔ 10).
 ## Tests and verification
 
 ```sh
-.venv/bin/python -m pytest services/gateway/tests -q     # 29 end-to-end tests: real processes, fake LLM
+.venv/bin/python -m pytest services/gateway/tests -q     # 30 end-to-end tests: real processes, fake LLM
 .venv/bin/python scripts/verify_dod.py                    # live definition of done + hardening checks against the cluster
 helm lint deploy/helm/urumi -f deploy/helm/urumi/values-prod.yaml
 ```
@@ -137,9 +137,9 @@ All verified live on the local cluster (`scripts/verify_dod.py`):
 
 | Item | What | Where |
 |---|---|---|
-| Security hardening | SSRF guard for admin-entered URLs (metadata/loopback/private blocked, HTTPS only, no redirects); **deny-by-default NetworkPolicies in both directions** with per-component allows — the gateway cannot reach metadata/private ranges, an MCP server only its backend (verified from inside the Pods); non-root, read-only root FS, dropped capabilities, no service-account tokens (no Kubernetes API access to minimise); upstream credentials encrypted at rest (Fernet); hashed keys with pepper; CSP on the dashboard; DNS-rebinding (Host) checks | `docs/08-hardening.md`, `templates/networkpolicy-default-deny.yaml`, `services/gateway/app/upstream_url.py`, `security.py`, `docs/THREAT_MODEL.md` |
+| Security hardening | SSRF guard for admin-entered URLs (metadata/loopback/private blocked, HTTPS only, no redirects); **deny-by-default NetworkPolicies in both directions** with per-component allows — the gateway cannot reach metadata/private ranges, an MCP server only its backend (verified from inside the Pods); non-root, read-only root FS, dropped capabilities, no service-account tokens (no Kubernetes API access to minimise); upstream credentials encrypted at rest (Fernet); hashed keys with pepper; CSP on the dashboard; DNS-rebinding (Host) checks; production TLS with HTTP→HTTPS redirect + HSTS and the ACME solver allowed through default-deny | `docs/08-hardening.md`, `templates/networkpolicy-default-deny.yaml`, `services/gateway/app/upstream_url.py`, `security.py`, `docs/THREAT_MODEL.md` |
 | Tool permissions | Per-role: admins mark tools *admins only* (default `update_order_status`); hidden from members' tool lists (MCP + assistant), refused and audited if called by name | `docs/08-hardening.md`, dashboard → MCP servers → Edit |
-| Scaling (partial) | Per-user rate limits (60 tool calls/min, 10 assistant messages/min); stateless gateway ready for replicas (limits are per replica) | `services/gateway/app/ratelimit.py`, `gateway.rateLimits` |
+| Scaling (partial) | Per-user rate limits (60 tool calls/min, 10 assistant messages/min); stateless gateway ready for replicas (limits are per replica); database sessions never span an upstream call, so one slow upstream cannot exhaust the connection pool (regression-tested with 20 concurrent slow calls) | `services/gateway/app/ratelimit.py`, `gateway.rateLimits` |
 | Upgrades and rollback | Documented and demonstrated `helm rollback` (8 ↔ 10), backup/restore commands verified, zero-downtime rollouts (`preStop`, 150/150 requests during a rollout) | `docs/OPERATIONS.md` |
 | Production-like deployment | `values-prod.yaml` (TLS, k3s ingress namespace, local-path, existing Secrets, pull secrets), server-side validated; CI building multi-arch images | `docs/PRODUCTION.md`, `.github/workflows/ci.yml` |
 | Observability (partial) | Per-upstream live status with latency and failure reason; audit log with durations and errors | dashboard *MCP servers*, *Audit log* |

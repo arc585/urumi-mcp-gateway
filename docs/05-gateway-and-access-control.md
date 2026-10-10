@@ -41,6 +41,7 @@ tools/call "woocommerce__get_order" → split at first "__" → upstream "woocom
 | SSRF guard on admin-entered URLs | Only exact internal Service names (from the chart) may be HTTP/internal; everything else must be HTTPS and resolve to public IPs only; no redirects followed; no credentials in URLs. |
 | Admin actions audited too | The definition of done says "all preceding actions" appear in the audit log: invites, key issue/revoke, upstream add/edit/disable/remove. |
 | Separate Postgres for the gateway | Different trust domain from the store's MariaDB. Waits for the DB at startup instead of crash-looping. |
+| **Database sessions never span an upstream call** | A session that has run a query pins one pooled connection until it commits, and the pool holds 15. Left open across a 30 s upstream call, 15 callers on one slow upstream would block every other request, including authentication and the readiness probe. `call_tool_as` reads policy in one short session, calls the upstream holding none, and audits in another; the status probe does the same (`docs/08-hardening.md` §4). |
 
 ## Kubernetes resources added
 
@@ -114,8 +115,8 @@ got an empty response; with it, 150/150 requests succeeded while the gateway rol
 - `create_all` instead of migrations: fine for this version; schema changes would need Alembic.
 - Tool lists are cached up to 15 s, so an upstream that *adds* a tool appears within 15 s; disabling is immediate.
 - Clients are not pushed `tools/list_changed` (stateless mode); they see changes when they next list tools.
-- DNS rebinding between the SSRF check and the connection is possible in theory; an egress NetworkPolicy for the
-  gateway is the planned second layer (security hardening, after the core).
+- DNS rebinding between the SSRF check and the connection is possible in theory; the gateway's egress NetworkPolicy
+  (`docs/08-hardening.md`) is the second layer that closes it at the network level.
 
 ## Interview check
 

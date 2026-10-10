@@ -44,7 +44,7 @@ Always: `helm template … | less` (review), back up (below), upgrade, watch, ve
 |---|---|---|---|
 | Gateway / MCP servers / dashboard | Build and push a new tag (CI on `git tag vX.Y.Z`), set `*.image.tag`, `helm upgrade` | `kubectl -n urumi rollout status deploy/urumi-gateway` | `helm rollback urumi <rev>` (restores the old tag) |
 | WordPress core | Bump `store.wordpress.image.tag` (e.g. `7.1.4-php8.4-apache`), `helm upgrade`. The image updates core files on the volume if newer. | `kubectl -n urumi logs deploy/urumi-wordpress` | Restore the volume/DB backup (core files and DB are migrated) |
-| WooCommerce plugin | wp-admin → Plugins → Update (it lives on the WordPress volume, not in an image) | wp-admin → WooCommerce → Status | Restore backups |
+| WooCommerce / Storefront | Bump `store.setup.woocommerceVersion` / `storefrontVersion`, `helm upgrade`: the setup Job installs exactly that version (`--force`) and runs `wp wc update`. They live on the WordPress volume, not in an image, so the pin is what makes installs reproducible. | `kubectl -n urumi logs job/urumi-store-setup`, wp-admin → WooCommerce → Status | Set the previous pin and upgrade again; restore the DB backup if WooCommerce migrated its tables |
 | MariaDB | Minor versions: bump `store.mariadb.image.tag` (it upgrades the data files on start); major: dump → restore into a new volume | `kubectl -n urumi logs urumi-mariadb-0` | Restore dump |
 | Postgres | Minor: bump `postgres.image.tag`. **Major (17→18) cannot reuse the data directory:** `pg_dump` → fresh volume → restore | `kubectl -n urumi logs urumi-postgres-0` | Restore dump |
 | Chart only (values/templates) | `helm upgrade`; the setup Job re-runs (idempotent) | `helm history`, `kubectl get pods -w` | `helm rollback` |

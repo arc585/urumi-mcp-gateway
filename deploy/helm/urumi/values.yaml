@@ -86,6 +86,10 @@ store:
       repository: wordpress
       tag: cli-php8.4
       pullPolicy: IfNotPresent
+    # Pinned so every install runs the same code and a rollback restores known versions. A fresh store
+    # gets exactly these; an existing store is moved to them (WooCommerce then runs its DB updates).
+    woocommerceVersion: "11.2.0"
+    storefrontVersion: "4.6.2"
     # Name and price of a product created only when the catalogue is empty.
     sampleProduct:
       name: Urumi Coffee Mug

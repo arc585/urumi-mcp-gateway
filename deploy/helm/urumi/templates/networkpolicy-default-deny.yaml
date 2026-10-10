@@ -124,5 +124,28 @@ spec:
         - { port: 443, protocol: TCP }
 {{- end }}
 {{- end }}
+{{- if .Values.ingress.tls.enabled }}
+---
+# 6. cert-manager's HTTP-01 solver runs a short-lived Pod *in this namespace* while a certificate is
+#    issued. Default-deny would cut it off from the ingress controller and the challenge would never pass.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "allow-acme-solver") }}
+  labels:
+    {{- include "urumi.labels" (list . "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+      ports:
+        - { port: 8089, protocol: TCP }
+{{- end }}
 {{- /* Demo MCP servers, the dashboard, MariaDB and Postgres need no outbound traffic: DNS only (policy 2). */}}
 {{- end }}

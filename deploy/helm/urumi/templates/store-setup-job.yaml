@@ -88,6 +88,10 @@ spec:
               value: {{ $setup.country | quote }}
             - name: STORE_TIMEZONE
               value: {{ $setup.timezone | quote }}
+            - name: WC_VERSION
+              value: {{ $setup.woocommerceVersion | quote }}
+            - name: STOREFRONT_VERSION
+              value: {{ $setup.storefrontVersion | quote }}
             - name: WP_ADMIN_USER
               value: {{ .Values.store.adminUser | quote }}
             - name: WP_ADMIN_EMAIL

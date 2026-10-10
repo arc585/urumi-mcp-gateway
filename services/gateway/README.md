@@ -41,4 +41,5 @@ Admin: `GET|POST /users`, `PATCH /users/{id}`, `GET|POST /users/{id}/keys`, `POS
 
 Starts the gateway (SQLite), two demo upstreams, a slow upstream, and a dead address as real processes, then checks
 auth, aggregation, isolation, timeouts, credential secrecy, audit attribution, revoke, disable, admin-only endpoints,
-SSRF, and the last-admin guard.
+SSRF, the last-admin guard, tool permissions, rate limits, the chat loop (fake model), and that slow upstreams
+never exhaust the database pool.

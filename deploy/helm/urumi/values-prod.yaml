@@ -33,18 +33,18 @@ store:
 woocommerceMcp:
   image:
     repository: ghcr.io/arc585/urumi-woocommerce-mcp
-    tag: "0.7.0"                              # immutable version tags in production, never :dev
+    tag: "0.8.1"                              # immutable version tags in production, never :dev
 
 demoMcp:
   image:
     repository: ghcr.io/arc585/urumi-demo-mcp
-    tag: "0.7.0"
+    tag: "0.8.1"
 
 gateway:
   host: app.example.com
   image:
     repository: ghcr.io/arc585/urumi-gateway
-    tag: "0.7.0"
+    tag: "0.8.1"
   bootstrapAdmin:
     email: admin@example.com
   existingSecret: urumi-gateway-credentials   # created by you; keys listed in docs/PRODUCTION.md
@@ -53,7 +53,7 @@ gateway:
 dashboard:
   image:
     repository: ghcr.io/arc585/urumi-dashboard
-    tag: "0.7.0"
+    tag: "0.8.1"
 
 postgres:
   persistence:

@@ -188,7 +188,7 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
-  {{- with (include "urumi.ingressAnnotations" .) }}
+  {{- with (include "urumi.ingressAnnotations" (list . true)) }}
   annotations:
     {{- . | nindent 4 }}
   {{- end }}

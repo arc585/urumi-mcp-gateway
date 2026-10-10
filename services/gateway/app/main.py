@@ -26,6 +26,16 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 log = logging.getLogger("urumi.gateway")
 
 
+class _DropProbeHits(logging.Filter):
+    """Keep kubelet probe requests out of the access log: two every 10 s per Pod, and they say nothing."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health/" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_DropProbeHits())
+
+
 def _csv(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
 

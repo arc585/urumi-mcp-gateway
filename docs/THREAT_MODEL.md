@@ -119,3 +119,7 @@ audit. A confirm-before-write step in the UI would be the next control.
 - Rate limits are per gateway replica (in memory); no confirm-before-write in chat.
 - The bootstrap admin key is seeded once from a Secret; recovery from losing all admin keys needs DB access.
 - Rotating the Fernet key in place is not implemented.
+- The gateway's egress policy allows any public host on 443 (needed for external MCP servers and the LLM), so a
+  compromised gateway could still reach the internet. Per-domain egress needs a CNI with FQDN policies (e.g. Cilium).
+- In production, plain HTTP is redirected to HTTPS and HSTS is sent, but a client that sends its key over
+  `http://` once has still put it on the wire in cleartext before the 308; treat such a key as leaked and revoke it.

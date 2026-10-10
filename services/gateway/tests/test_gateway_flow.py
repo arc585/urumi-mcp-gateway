@@ -229,6 +229,30 @@ async def test_a_dead_upstream_does_not_slow_tool_listing(stack):
     assert (time.perf_counter() - started) / 3 < 1.0
 
 
+async def test_slow_upstream_calls_do_not_hold_database_connections(stack):
+    """One slow upstream must not stall everyone else.
+
+    20 concurrent calls wait out the 3 s call timeout on the slow upstream. The connection pool has
+    15 connections: if each in-flight call held one for the duration of the upstream wait, the 16th
+    caller, including authentication for every other request, would block until the slow calls
+    time out. A healthy call and a dashboard API request issued meanwhile must answer immediately.
+    """
+    import time
+
+    _, key = new_member(stack, "Pat")
+    _, other = new_member(stack, "Quinn")
+    slow = asyncio.gather(*(mcp_call(stack, key, "slow-info__lookup_store_info", {"topic": "hours"}) for _ in range(20)))
+    await asyncio.sleep(0.5)  # let the slow calls reach their upstream wait
+    started = time.perf_counter()
+    healthy = await mcp_call(stack, other, "store-info__lookup_store_info", {"topic": "hours"})
+    me = await asyncio.to_thread(lambda: api(stack, other).get("/me").status_code)
+    elapsed = time.perf_counter() - started
+    results = await slow
+    assert not healthy.is_error and me == 200
+    assert elapsed < 1.5, f"healthy work waited {elapsed:.1f}s behind slow upstream calls"
+    assert all(r.is_error and "timed out" in r.content[0].text for r in results)
+
+
 # --------------------------------------------------------------------------- chat agent
 
 

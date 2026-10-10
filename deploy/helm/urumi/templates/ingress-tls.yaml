@@ -1,0 +1,26 @@
+{{- if .Values.ingress.tls.enabled }}
+# With TLS on, Traefik still answers plain HTTP for the same hosts, so a client that sends its API key to
+# http://app.<domain>/mcp would be served in cleartext. These two Traefik Middlewares, attached to every
+# Ingress by "urumi.ingressAnnotations", redirect HTTP to HTTPS and add Strict-Transport-Security.
+# (cert-manager's HTTP-01 challenge keeps working: Let's Encrypt follows the redirect.)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "urumi.componentName" (list . "redirect-https") }}
+  labels:
+    {{- include "urumi.labels" (list . "network") | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "urumi.componentName" (list . "hsts") }}
+  labels:
+    {{- include "urumi.labels" (list . "network") | nindent 4 }}
+spec:
+  headers:
+    stsSeconds: 31536000
+{{- end }}
