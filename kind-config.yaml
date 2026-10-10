@@ -1,0 +1,23 @@
+# Kind runs a local Kubernetes cluster inside Docker containers.
+# Each "node" below is a Docker container that acts as a Kubernetes machine.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: urumi
+nodes:
+  - role: control-plane
+    # The ingress controller (Traefik) is pinned to nodes with this label, because this is
+    # the node whose ports are published to the Mac below.
+    labels:
+      ingress-ready: "true"
+    # Publish the node container's ports 80/443 on the Mac. Host ports 80/443 are used by
+    # another local project, so we use 8880/8843 and bind to 127.0.0.1 (this Mac only).
+    # Browser URLs therefore look like http://store.urumi.test:8880
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8880
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8843
+        listenAddress: "127.0.0.1"
+        protocol: TCP

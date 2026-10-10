@@ -1,0 +1,12 @@
+# Keep build context small and secrets out of images.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+frontend/dist
+.env
+.env.*
+*.db
+docs
+deploy

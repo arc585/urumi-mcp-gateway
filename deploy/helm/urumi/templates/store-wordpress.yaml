@@ -1,0 +1,143 @@
+{{- if .Values.store.enabled }}
+{{- $name := include "urumi.componentName" (list . "wordpress") }}
+{{- $secret := include "urumi.storeSecretName" . }}
+{{- $wp := .Values.store.wordpress }}
+# PersistentVolumeClaim: a request for durable disk. WordPress core, plugins (WooCommerce),
+# themes, and uploads live here, so they survive Pod restarts and image upgrades.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "wordpress") | nindent 4 }}
+  annotations:
+    # Do not delete store content on `helm uninstall`.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $wp.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $wp.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "wordpress") | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate: stop the old Pod before starting the new one. A ReadWriteOnce volume can only
+  # be attached to one node at a time, so a rolling update could deadlock on the disk.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wordpress
+          image: "{{ $wp.image.repository }}:{{ $wp.image.tag }}"
+          imagePullPolicy: {{ $wp.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # The official image writes wp-config.php from these on first start.
+            - name: WORDPRESS_DB_HOST
+              value: "{{ include "urumi.componentName" (list . "mariadb") }}:3306"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.store.mariadb.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.store.mariadb.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: mariadb-password
+          # Readiness runs PHP and touches the database, so the Pod only receives traffic
+          # when the whole store can answer. 3xx redirects count as success.
+          readinessProbe:
+            httpGet:
+              path: /wp-login.php
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness only checks that Apache answers a static file. A database outage should
+          # make the Pod unready, not trigger endless restarts of a healthy web server.
+          livenessProbe:
+            httpGet:
+              path: /wp-includes/images/blank.gif
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml $wp.resources | nindent 12 }}
+          securityContext:
+            # Apache starts as root to bind port 80, then serves requests as www-data.
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: content
+              mountPath: /var/www/html
+      volumes:
+        - name: content
+          persistentVolumeClaim:
+            claimName: {{ $name }}
+---
+# Service: a stable in-cluster name and virtual IP in front of whichever WordPress Pod is running.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "wordpress") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Ingress: tells the ingress controller (Traefik) to route http://<store host>/ to the Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "wordpress") | nindent 4 }}
+  {{- with (include "urumi.ingressAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- include "urumi.ingressTls" (list . .Values.store.host "store") | nindent 2 }}
+  rules:
+    - host: {{ .Values.store.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}

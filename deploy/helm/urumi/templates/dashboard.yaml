@@ -1,0 +1,133 @@
+{{- if and .Values.dashboard.enabled .Values.gateway.enabled }}
+{{- $name := include "urumi.componentName" (list . "dashboard") }}
+{{- $ui := .Values.dashboard }}
+# The dashboard is static files: a stateless nginx Deployment. It holds no secrets and talks to
+# nothing; the browser calls /api on the same host, which the Ingress routes to the gateway.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "dashboard") | nindent 4 }}
+spec:
+  replicas: {{ $ui.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "dashboard") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list . "dashboard") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "urumi.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: "{{ $ui.image.repository }}:{{ $ui.image.tag }}"
+          imagePullPolicy: {{ $ui.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          # Zero-downtime rollouts: keep serving for a few seconds after the Pod is marked terminating,
+          # while the ingress controller and Service endpoints stop routing to it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            {{- toYaml $ui.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # nginx needs a writable place for its pid file and temp buffers.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "dashboard") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "urumi.selectorLabels" (list . "dashboard") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Same host as the gateway: "/" goes here; the gateway's Ingress claims the longer /api and /mcp
+# prefixes, and the longest matching prefix wins. One origin means no CORS for the dashboard.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "dashboard") | nindent 4 }}
+  {{- /* No cert-manager annotation here: the gateway Ingress for the same host requests the certificate,
+       and both Ingresses reference the same TLS Secret. Two owners would fight over one Certificate. */}}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- include "urumi.ingressTls" (list . .Values.gateway.host "app") | nindent 2 }}
+  rules:
+    - host: {{ .Values.gateway.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- if .Values.networkPolicies.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "dashboard") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "dashboard") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.ingressControllerNamespace }}
+      ports:
+        - port: http
+{{- end }}
+{{- end }}

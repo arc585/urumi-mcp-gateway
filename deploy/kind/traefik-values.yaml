@@ -1,0 +1,45 @@
+# Traefik ingress controller for the local Kind cluster (k3s ships Traefik already).
+# Install: helm upgrade --install traefik traefik/traefik -n traefik --create-namespace -f deploy/kind/traefik-values.yaml
+#
+# Kind publishes the node container's ports 80/443 to the Mac as 127.0.0.1:8880/8843
+# (see kind-config.yaml). Traefik binds those node ports with hostPort, so:
+#   Mac :8880 -> Kind node :80 -> Traefik Pod -> Service -> Pods
+deployment:
+  replicas: 1
+
+# Run on the labelled node whose ports are published (the only node in our cluster).
+nodeSelector:
+  ingress-ready: "true"
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+ports:
+  web:
+    hostPort: 80
+  websecure:
+    hostPort: 443
+
+# No cloud load balancer on a laptop; traffic arrives through hostPort instead.
+# (In chart v41 the type lives under service.spec, not service.type.)
+service:
+  spec:
+    type: ClusterIP
+
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+  name: traefik
+
+providers:
+  kubernetesIngress:
+    enabled: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

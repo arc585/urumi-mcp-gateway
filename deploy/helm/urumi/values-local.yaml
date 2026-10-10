@@ -1,0 +1,11 @@
+# Local Kind cluster. Only differences from values.yaml belong here.
+ingress:
+  className: traefik
+  # Kind publishes the ingress controller on 127.0.0.1:8880 (see kind-config.yaml).
+  publicPort: "8880"
+
+store:
+  host: store.urumi.test
+
+gateway:
+  host: app.urumi.test

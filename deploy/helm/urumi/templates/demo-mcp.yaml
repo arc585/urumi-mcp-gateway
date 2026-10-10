@@ -1,0 +1,122 @@
+{{- if .Values.demoMcp.enabled }}
+{{- $root := . }}
+{{- $demo := .Values.demoMcp }}
+{{- range $server := $demo.servers }}
+{{- $component := printf "%s-mcp" $server.id }}
+{{- $name := include "urumi.componentName" (list $root $component) }}
+---
+# Demo upstream "{{ $server.id }}" ({{ $server.name }}). Internal only, like the WooCommerce MCP server.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list $root $component) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list $root $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list $root $component) | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "urumi.imagePullSecrets" $root | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          image: "{{ $demo.image.repository }}:{{ $demo.image.tag }}"
+          imagePullPolicy: {{ $demo.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: DEMO_APP
+              value: {{ $server.module | quote }}
+            - name: DEMO_DELAY_SECONDS
+              value: {{ $server.delaySeconds | default 0 | quote }}
+            - name: MCP_ALLOWED_HOSTS
+              value: "{{ $name }},{{ $name }}:8000,{{ $name }}.{{ $root.Release.Namespace }}.svc.cluster.local:8000,localhost:*,127.0.0.1:*"
+            {{- if $server.requireToken }}
+            - name: REQUIRED_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "urumi.gatewaySecretName" $root }}
+                  key: shipping-token
+            {{- end }}
+          # Zero-downtime rollouts: keep serving for a few seconds after the Pod is marked terminating,
+          # while the ingress controller and Service endpoints stop routing to it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $demo.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list $root $component) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "urumi.selectorLabels" (list $root $component) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+{{- if $root.Values.networkPolicies.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list $root $component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list $root $component) | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (list $root "gateway") | nindent 14 }}
+      ports:
+        - port: http
+{{- end }}
+{{- end }}
+{{- end }}

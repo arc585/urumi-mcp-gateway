@@ -1,0 +1,235 @@
+# Default values for the urumi chart.
+# values-local.yaml (Kind) and values-prod.yaml (k3s VPS) override only what differs per environment.
+# Never put passwords or keys in any values file: the chart generates them into Secrets,
+# or (in production) points at Secrets you create yourself via `existingSecret`.
+
+nameOverride: ""
+# Secrets for pulling our own images from a private registry, e.g. [{name: ghcr-pull}].
+imagePullSecrets: []
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Ingress: the HTTP front door from outside the cluster into Services.
+# ---------------------------------------------------------------------------
+ingress:
+  # Traefik is the default ingress controller on k3s, and we install it on Kind too,
+  # so local and production use the same IngressClass.
+  className: traefik
+  # Port that appears in public URLs. Empty means the standard port (80/443).
+  publicPort: ""
+  annotations: {}
+  tls:
+    enabled: false
+    # cert-manager ClusterIssuer that should issue certificates (production only).
+    clusterIssuer: ""
+
+# NetworkPolicies restrict which Pods may talk to which. Internal services stay internal.
+networkPolicies:
+  enabled: true
+  # Namespace where the ingress controller's Pods run: "traefik" on our Kind setup,
+  # "kube-system" on k3s (which installs Traefik there).
+  ingressControllerNamespace: traefik
+
+# ---------------------------------------------------------------------------
+# Store: WordPress + WooCommerce + MariaDB
+# ---------------------------------------------------------------------------
+store:
+  enabled: true
+  host: store.urumi.test
+  title: Urumi Demo Store
+  adminUser: admin
+  adminEmail: admin@example.test
+  # Production: name of a Secret you created with keys
+  # mariadb-root-password, mariadb-password, wordpress-admin-password,
+  # woocommerce-consumer-key, woocommerce-consumer-secret.
+  # Empty: the chart generates random values once and keeps them across upgrades.
+  existingSecret: ""
+
+  wordpress:
+    image:
+      repository: wordpress
+      tag: 7.1.3-php8.4-apache
+      pullPolicy: IfNotPresent
+    persistence:
+      size: 2Gi
+      # Empty uses the cluster's default StorageClass ("standard" on Kind, "local-path" on k3s).
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 768Mi
+
+  # One-shot Job that installs WordPress, WooCommerce, the Storefront theme, Cash on Delivery,
+  # and the REST API key used by the WooCommerce MCP server. Safe to re-run.
+  setup:
+    image:
+      repository: wordpress
+      tag: cli-php8.4
+      pullPolicy: IfNotPresent
+    # Name and price of a product created only when the catalogue is empty.
+    sampleProduct:
+      name: Urumi Coffee Mug
+      price: "499"
+    currency: INR
+    country: "IN:KA"
+    # Store timezone: WordPress shows times in it, and the MCP server uses it to decide what "today" means.
+    timezone: Asia/Kolkata
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 768Mi
+
+  mariadb:
+    image:
+      repository: mariadb
+      tag: "11.8"
+      pullPolicy: IfNotPresent
+    database: wordpress
+    user: wordpress
+    persistence:
+      size: 2Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# WooCommerce MCP server: our own MCP server, internal to the cluster (no Ingress).
+# ---------------------------------------------------------------------------
+woocommerceMcp:
+  enabled: true
+  image:
+    repository: urumi-woocommerce-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # How long one WooCommerce REST call may take before the tool returns a clear timeout error.
+  timeoutSeconds: 15
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Demo MCP servers: two more upstreams (one image, different modules). Internal only.
+# ---------------------------------------------------------------------------
+demoMcp:
+  enabled: true
+  image:
+    repository: urumi-demo-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+  servers:
+    - id: store-info            # upstream id = tool prefix; Service = <release>-store-info-mcp
+      name: Store Info
+      module: app.server:app
+      requireToken: false
+      delaySeconds: 0
+    - id: shipping-info
+      name: Shipping Info
+      module: app.shipping:app
+      # The server demands "Authorization: Bearer <token>"; the token lives in the gateway Secret
+      # and is stored encrypted as this upstream's credential. Members never see it.
+      requireToken: true
+      delaySeconds: 0
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 192Mi
+
+# ---------------------------------------------------------------------------
+# Gateway: dashboard API (/api) and the team's single MCP endpoint (/mcp)
+# ---------------------------------------------------------------------------
+gateway:
+  enabled: true
+  host: app.urumi.test
+  image:
+    repository: urumi-gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # First admin. The key is generated into the Secret; read it with kubectl (see docs/RUNBOOK.md).
+  bootstrapAdmin:
+    email: admin@example.test
+    name: Workspace Admin
+  # Production: name of a Secret you created with keys api-key-pepper, upstream-encryption-key,
+  # bootstrap-admin-key, postgres-password, shipping-token.
+  existingSecret: ""
+  # Dashboard chat agent. Any OpenAI-compatible Chat Completions API; Google Gemini by default.
+  # The API key is NOT managed by Helm: create the Secret yourself (docs/07-chat-agent.md):
+  #   kubectl -n urumi create secret generic urumi-llm --from-literal=api-key=...
+  chat:
+    baseUrl: https://generativelanguage.googleapis.com/v1beta/openai/
+    # Each model has its own free-tier quota (gemini-2.5-flash: only 20 requests/day). If the primary
+    # model is out of quota when a message starts, the gateway tries the fallbacks in order.
+    model: gemini-3.5-flash
+    fallbackModels: "gemini-3.1-flash-lite"
+    apiKeySecret: urumi-llm
+    apiKeySecretKey: api-key
+    timeoutSeconds: 60
+    maxToolRounds: 6
+  upstreamTimeouts:
+    discoverySeconds: 5   # tools/list and health checks, per upstream
+    callSeconds: 30       # one tools/call, including connect + initialize
+    toolCacheSeconds: 15  # how long a discovered tool list is reused
+  resources:
+    requests:
+      cpu: 100m
+      memory: 160Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Dashboard: static React app served by unprivileged nginx at http://<gateway host>/
+# (/api and /mcp on the same host go to the gateway).
+# ---------------------------------------------------------------------------
+dashboard:
+  enabled: true
+  image:
+    repository: urumi-dashboard
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+# Gateway database (users, hashed keys, encrypted upstream credentials, audit log).
+postgres:
+  image:
+    repository: postgres
+    tag: 18-alpine
+    pullPolicy: IfNotPresent
+  database: gateway
+  user: gateway
+  persistence:
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi

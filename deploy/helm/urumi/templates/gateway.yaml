@@ -1,0 +1,227 @@
+{{- if .Values.gateway.enabled }}
+{{- $name := include "urumi.componentName" (list . "gateway") }}
+{{- $gw := .Values.gateway }}
+{{- $secret := include "urumi.gatewaySecretName" . }}
+{{- $publicUrl := include "urumi.publicUrl" (list . $gw.host) }}
+{{- /* Upstreams registered on first start. Internal hosts are also the SSRF allow-list. */}}
+{{- $defaults := list }}
+{{- $internalHosts := list }}
+{{- if .Values.woocommerceMcp.enabled }}
+{{- $wc := include "urumi.componentName" (list . "woocommerce-mcp") }}
+{{- $defaults = append $defaults (dict "id" "woocommerce" "name" "WooCommerce" "url" (printf "http://%s:8000/mcp" $wc)) }}
+{{- $internalHosts = append $internalHosts $wc }}
+{{- end }}
+{{- if .Values.demoMcp.enabled }}
+{{- range $server := .Values.demoMcp.servers }}
+{{- $svc := include "urumi.componentName" (list $ (printf "%s-mcp" $server.id)) }}
+{{- $entry := dict "id" $server.id "name" $server.name "url" (printf "http://%s:8000/mcp" $svc) }}
+{{- if $server.requireToken }}
+{{- $_ := set $entry "auth_header" "Authorization" }}
+{{- $_ := set $entry "credential_env" "SHIPPING_INFO_CREDENTIAL" }}
+{{- end }}
+{{- $defaults = append $defaults $entry }}
+{{- $internalHosts = append $internalHosts $svc }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
+spec:
+  replicas: {{ $gw.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list . "gateway") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "urumi.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ $gw.image.repository }}:{{ $gw.image.tag }}"
+          imagePullPolicy: {{ $gw.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: APP_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: postgres-password
+            # $(POSTGRES_PASSWORD) is expanded by Kubernetes from the variable above.
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://{{ .Values.postgres.user }}:$(POSTGRES_PASSWORD)@{{ include "urumi.componentName" (list . "postgres") }}:5432/{{ .Values.postgres.database }}"
+            - name: API_KEY_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: api-key-pepper
+            - name: UPSTREAM_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: upstream-encryption-key
+            - name: BOOTSTRAP_ADMIN_EMAIL
+              value: {{ $gw.bootstrapAdmin.email | quote }}
+            - name: BOOTSTRAP_ADMIN_NAME
+              value: {{ $gw.bootstrapAdmin.name | quote }}
+            - name: BOOTSTRAP_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: bootstrap-admin-key
+            - name: SHIPPING_INFO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: shipping-token
+            # Read once at first start, then stored encrypted as the shipping upstream's credential.
+            - name: SHIPPING_INFO_CREDENTIAL
+              value: "Bearer $(SHIPPING_INFO_TOKEN)"
+            - name: DEFAULT_UPSTREAMS
+              value: {{ $defaults | toJson | quote }}
+            - name: INTERNAL_UPSTREAM_HOSTS
+              value: {{ join "," $internalHosts | quote }}
+            # Chat agent. optional: true lets the gateway run before you create the Secret; the chat
+            # endpoint then answers 503 with setup instructions. Env from a Secret is read at Pod start,
+            # so after creating or rotating it: kubectl -n urumi rollout restart deploy/urumi-gateway
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gw.chat.apiKeySecret }}
+                  key: {{ $gw.chat.apiKeySecretKey }}
+                  optional: true
+            - name: LLM_BASE_URL
+              value: {{ $gw.chat.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ $gw.chat.model | quote }}
+            - name: LLM_FALLBACK_MODELS
+              value: {{ $gw.chat.fallbackModels | default "" | quote }}
+            - name: LLM_TIMEOUT_SECONDS
+              value: {{ $gw.chat.timeoutSeconds | quote }}
+            - name: CHAT_MAX_TOOL_ROUNDS
+              value: {{ $gw.chat.maxToolRounds | quote }}
+            - name: UPSTREAM_DISCOVERY_TIMEOUT_SECONDS
+              value: {{ $gw.upstreamTimeouts.discoverySeconds | quote }}
+            - name: UPSTREAM_CALL_TIMEOUT_SECONDS
+              value: {{ $gw.upstreamTimeouts.callSeconds | quote }}
+            - name: UPSTREAM_TOOL_CACHE_SECONDS
+              value: {{ $gw.upstreamTimeouts.toolCacheSeconds | quote }}
+            # DNS-rebinding protection for /mcp: the public host, the Service name, and localhost.
+            - name: MCP_ALLOWED_HOSTS
+              value: "{{ $gw.host }},{{ $gw.host }}:*,{{ $name }}:8000,localhost:*,127.0.0.1:*"
+            - name: MCP_ALLOWED_ORIGINS
+              value: "{{ $publicUrl }},http://localhost:*,http://127.0.0.1:*"
+          # Zero-downtime rollouts: keep serving for a few seconds after the Pod is marked terminating,
+          # while the ingress controller and Service endpoints stop routing to it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml $gw.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "urumi.selectorLabels" (list . "gateway") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+# Public entry: http://<gateway host>/api (dashboard API) and /mcp (the team's MCP endpoint).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
+  {{- with (include "urumi.ingressAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- include "urumi.ingressTls" (list . $gw.host "app") | nindent 2 }}
+  rules:
+    - host: {{ $gw.host | quote }}
+      http:
+        paths:
+          {{- range $path := list "/api" "/mcp" }}
+          - path: {{ $path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+          {{- end }}
+{{- if .Values.networkPolicies.enabled }}
+---
+# The gateway accepts traffic only via the ingress controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "gateway") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.ingressControllerNamespace }}
+      ports:
+        - port: http
+{{- end }}
+{{- end }}

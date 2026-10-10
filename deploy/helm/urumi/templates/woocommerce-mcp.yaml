@@ -1,0 +1,131 @@
+{{- if .Values.woocommerceMcp.enabled }}
+{{- $name := include "urumi.componentName" (list . "woocommerce-mcp") }}
+{{- $mcp := .Values.woocommerceMcp }}
+{{- $secret := include "urumi.storeSecretName" . }}
+# Our WooCommerce MCP server. Internal only: a ClusterIP Service, no Ingress, and a
+# NetworkPolicy that admits only the gateway's Pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "woocommerce-mcp") | nindent 4 }}
+spec:
+  replicas: {{ $mcp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "woocommerce-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list . "woocommerce-mcp") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "urumi.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          image: "{{ $mcp.image.repository }}:{{ $mcp.image.tag }}"
+          imagePullPolicy: {{ $mcp.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            # In-cluster address of the WordPress Service (never the public URL).
+            - name: WOOCOMMERCE_URL
+              value: "http://{{ include "urumi.componentName" (list . "wordpress") }}"
+            - name: WOOCOMMERCE_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: woocommerce-consumer-key
+            - name: WOOCOMMERCE_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: woocommerce-consumer-secret
+            - name: WOOCOMMERCE_TIMEOUT_SECONDS
+              value: {{ $mcp.timeoutSeconds | quote }}
+            # Links returned to users point at the public storefront.
+            - name: STORE_PUBLIC_URL
+              value: {{ include "urumi.publicUrl" (list . .Values.store.host) | quote }}
+            - name: STORE_TIMEZONE
+              value: {{ .Values.store.setup.timezone | quote }}
+            # DNS-rebinding protection: accept only our Service name (and localhost for port-forward).
+            - name: MCP_ALLOWED_HOSTS
+              value: "{{ $name }},{{ $name }}:8000,{{ $name }}.{{ .Release.Namespace }}.svc.cluster.local:8000,localhost:*,127.0.0.1:*"
+          # Zero-downtime rollouts: keep serving for a few seconds after the Pod is marked terminating,
+          # while the ingress controller and Service endpoints stop routing to it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $mcp.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "woocommerce-mcp") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "urumi.selectorLabels" (list . "woocommerce-mcp") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+{{- if .Values.networkPolicies.enabled }}
+---
+# Only the gateway may call this MCP server. External clients and the browser must go through
+# the gateway, which authenticates the user and writes the audit log.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "woocommerce-mcp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "woocommerce-mcp") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (list . "gateway") | nindent 14 }}
+      ports:
+        - port: http
+{{- end }}
+{{- end }}

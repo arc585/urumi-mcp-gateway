@@ -1,0 +1,120 @@
+{{- if .Values.store.enabled }}
+{{- $name := include "urumi.componentName" (list . "mariadb") }}
+{{- $secret := include "urumi.storeSecretName" . }}
+{{- $db := .Values.store.mariadb }}
+# Headless Service (clusterIP: None): gives the StatefulSet's Pod a stable DNS name,
+# "urumi-mariadb", that WordPress uses to reach the database. No external access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "mariadb") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "urumi.selectorLabels" (list . "mariadb") | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+# StatefulSet: like a Deployment, but each Pod keeps a stable identity and its *own*
+# PersistentVolumeClaim (from volumeClaimTemplates). Deleting the Pod does not delete its data.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "mariadb") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "mariadb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list . "mariadb") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The mariadb image's "mysql" user. Running as it from the start avoids root entirely.
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mariadb
+          image: "{{ $db.image.repository }}:{{ $db.image.tag }}"
+          imagePullPolicy: {{ $db.image.pullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MARIADB_DATABASE
+              value: {{ $db.database | quote }}
+            - name: MARIADB_USER
+              value: {{ $db.user | quote }}
+            # Credentials come from the Secret, never from values files.
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: mariadb-password
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: mariadb-root-password
+          # Readiness: "send me traffic" only once InnoDB is initialised.
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          # Liveness: restart the container if the server stops accepting connections.
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml $db.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: run
+              mountPath: /run/mysqld
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  # Each replica gets a PVC named data-<pod>, e.g. data-urumi-mariadb-0.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "urumi.selectorLabels" (list . "mariadb") | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $db.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $db.persistence.size }}
+{{- end }}

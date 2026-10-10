@@ -1,0 +1,49 @@
+{{- if and .Values.store.enabled .Values.networkPolicies.enabled }}
+# NetworkPolicy: a firewall rule for Pods. Once a Pod is selected by a policy, only the traffic
+# the policy allows can reach it. Here: only WordPress and the setup Job may open MariaDB.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "mariadb") }}
+  labels:
+    {{- include "urumi.labels" (list . "mariadb") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "mariadb") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (list . "store-setup") | nindent 14 }}
+      ports:
+        - port: mysql
+---
+# WordPress accepts HTTP only from the ingress controller (shoppers and admins arriving through
+# the Ingress) and from the WooCommerce MCP server (REST API calls). Any other Pod is refused.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "wordpress") }}
+  labels:
+    {{- include "urumi.labels" (list . "wordpress") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.ingressControllerNamespace }}
+        - podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (list . "woocommerce-mcp") | nindent 14 }}
+      ports:
+        - port: http
+{{- end }}

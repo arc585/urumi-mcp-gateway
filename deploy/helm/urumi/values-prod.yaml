@@ -1,0 +1,61 @@
+# Production-like single-node k3s VPS. Same chart as local; only these values differ.
+# Replace example.com (and the image owner if you fork), then follow docs/PRODUCTION.md.
+# No secrets here: the Secrets named below are created on the server with kubectl.
+
+ingress:
+  className: traefik           # bundled with k3s
+  publicPort: ""               # standard ports 80/443
+  tls:
+    enabled: true              # HTTPS via cert-manager + Let's Encrypt
+    clusterIssuer: letsencrypt-prod
+
+networkPolicies:
+  ingressControllerNamespace: kube-system   # k3s runs its Traefik in kube-system
+
+# Our images live in GHCR. Public packages need nothing here; for private ones create a
+# docker-registry Secret named ghcr-pull (docs/PRODUCTION.md) and uncomment:
+# imagePullSecrets:
+#   - name: ghcr-pull
+
+store:
+  host: store.example.com
+  adminEmail: admin@example.com
+  existingSecret: urumi-store-credentials     # created by you; keys listed in docs/PRODUCTION.md
+  wordpress:
+    persistence:
+      storageClass: local-path                # k3s' built-in provisioner (node-local disk)
+      size: 10Gi
+  mariadb:
+    persistence:
+      storageClass: local-path
+      size: 10Gi
+
+woocommerceMcp:
+  image:
+    repository: ghcr.io/arnuvchaubey/urumi-woocommerce-mcp
+    tag: "0.7.0"                              # immutable version tags in production, never :dev
+
+demoMcp:
+  image:
+    repository: ghcr.io/arnuvchaubey/urumi-demo-mcp
+    tag: "0.7.0"
+
+gateway:
+  host: app.example.com
+  image:
+    repository: ghcr.io/arnuvchaubey/urumi-gateway
+    tag: "0.7.0"
+  bootstrapAdmin:
+    email: admin@example.com
+  existingSecret: urumi-gateway-credentials   # created by you; keys listed in docs/PRODUCTION.md
+  # LLM key Secret urumi-llm is created by you as well (same as locally).
+
+dashboard:
+  image:
+    repository: ghcr.io/arnuvchaubey/urumi-dashboard
+    tag: "0.7.0"
+
+postgres:
+  persistence:
+    storageClass: local-path
+    size: 5Gi

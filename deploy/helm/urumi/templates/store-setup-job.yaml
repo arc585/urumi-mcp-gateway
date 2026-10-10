@@ -1,0 +1,133 @@
+{{- if .Values.store.enabled }}
+{{- $name := include "urumi.componentName" (list . "store-setup") }}
+{{- $secret := include "urumi.storeSecretName" . }}
+{{- $setup := .Values.store.setup }}
+# ConfigMap: non-secret files and settings. Here it carries the setup scripts the Job runs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "store-setup") | nindent 4 }}
+data:
+  store-setup.sh: |-
+    {{- .Files.Get "files/store-setup.sh" | nindent 4 }}
+  ensure-api-key.php: |-
+    {{- .Files.Get "files/ensure-api-key.php" | nindent 4 }}
+---
+# Job: runs a Pod to completion once (instead of keeping it running like a Deployment).
+# As a Helm hook it runs after every install and upgrade; the script is idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "store-setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    # Delete the previous run's Job just before creating a new one; the latest stays for `kubectl logs`.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.selectorLabels" (list . "store-setup") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      # The WordPress volume is ReadWriteOnce (one node at a time), so run next to the WordPress Pod.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 18 }}
+      securityContext:
+        # The WordPress image owns files as www-data (uid 33); the Alpine-based CLI image's
+        # www-data is uid 82, so we pin 33 to be able to install plugins onto the shared volume.
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wp-cli
+          image: "{{ $setup.image.repository }}:{{ $setup.image.tag }}"
+          imagePullPolicy: {{ $setup.image.pullPolicy }}
+          command: ["/bin/sh", "/setup/store-setup.sh"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: WP_CLI_CACHE_DIR
+              value: /tmp/wp-cli-cache
+            - name: WP_CLI_PHP_ARGS
+              value: "-d memory_limit=512M"
+            # Same database settings as WordPress, read by wp-config.php.
+            - name: WORDPRESS_DB_HOST
+              value: "{{ include "urumi.componentName" (list . "mariadb") }}:3306"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.store.mariadb.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.store.mariadb.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: mariadb-password
+            - name: SITE_URL
+              value: {{ include "urumi.publicUrl" (list . .Values.store.host) | quote }}
+            - name: STORE_TITLE
+              value: {{ .Values.store.title | quote }}
+            - name: STORE_CURRENCY
+              value: {{ $setup.currency | quote }}
+            - name: STORE_COUNTRY
+              value: {{ $setup.country | quote }}
+            - name: STORE_TIMEZONE
+              value: {{ $setup.timezone | quote }}
+            - name: WP_ADMIN_USER
+              value: {{ .Values.store.adminUser | quote }}
+            - name: WP_ADMIN_EMAIL
+              value: {{ .Values.store.adminEmail | quote }}
+            - name: WP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: wordpress-admin-password
+            - name: WC_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: woocommerce-consumer-key
+            - name: WC_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: woocommerce-consumer-secret
+            - name: SAMPLE_PRODUCT_NAME
+              value: {{ $setup.sampleProduct.name | quote }}
+            - name: SAMPLE_PRODUCT_PRICE
+              value: {{ $setup.sampleProduct.price | quote }}
+          resources:
+            {{- toYaml $setup.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: content
+              mountPath: /var/www/html
+            - name: setup
+              mountPath: /setup
+              readOnly: true
+      volumes:
+        - name: content
+          persistentVolumeClaim:
+            claimName: {{ include "urumi.componentName" (list . "wordpress") }}
+        - name: setup
+          configMap:
+            name: {{ $name }}
+{{- end }}
