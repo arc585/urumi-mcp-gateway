@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import Caller, authenticate, extract_key
 from .db import get_session
-from .models import AdminEvent, ApiKey, ToolAudit, Upstream, User, now_utc
+from .models import AdminEvent, AdminOnlyTool, ApiKey, ToolAudit, Upstream, User, now_utc
 from .schemas import (
     AdminEventView,
     AuditView,
@@ -230,7 +230,29 @@ async def revoke_all_keys(
 # --------------------------------------------------------------------------- upstreams
 
 
-def _upstream_view(upstream: Upstream) -> UpstreamView:
+TOOL_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+async def _restricted(session: AsyncSession) -> dict[str, list[str]]:
+    rows = (await session.execute(select(AdminOnlyTool.upstream_id, AdminOnlyTool.tool_name))).all()
+    restricted: dict[str, list[str]] = {}
+    for upstream_id, tool in rows:
+        restricted.setdefault(upstream_id, []).append(tool)
+    return {key: sorted(value) for key, value in restricted.items()}
+
+
+async def _set_admin_only(session: AsyncSession, upstream_id: str, tools: list[str]) -> list[str]:
+    clean = sorted({tool.strip() for tool in tools if tool.strip()})
+    if any(not TOOL_NAME.fullmatch(tool) for tool in clean):
+        raise HTTPException(422, "admin_only_tools must be plain tool names, e.g. update_order_status")
+    for row in (await session.scalars(select(AdminOnlyTool).where(AdminOnlyTool.upstream_id == upstream_id))).all():
+        await session.delete(row)
+    for tool in clean:
+        session.add(AdminOnlyTool(upstream_id=upstream_id, tool_name=tool))
+    return clean
+
+
+def _upstream_view(upstream: Upstream, admin_only: list[str] | None = None) -> UpstreamView:
     return UpstreamView(
         id=upstream.id,
         name=upstream.name,
@@ -238,6 +260,7 @@ def _upstream_view(upstream: Upstream) -> UpstreamView:
         enabled=upstream.enabled,
         auth_header=upstream.auth_header,
         has_credential=bool(upstream.credential_ciphertext),
+        admin_only_tools=admin_only or [],
         updated_at=upstream.updated_at,
     )
 
@@ -248,7 +271,8 @@ async def list_upstreams(
 ) -> list[UpstreamView] | list[UpstreamPublicView]:
     rows = (await session.scalars(select(Upstream).order_by(Upstream.name))).all()
     if caller.is_admin:
-        return [_upstream_view(row) for row in rows]
+        restricted = await _restricted(session)
+        return [_upstream_view(row, restricted.get(row.id)) for row in rows]
     return [UpstreamPublicView(id=row.id, name=row.name, enabled=row.enabled) for row in rows]
 
 
@@ -291,10 +315,13 @@ async def add_upstream(
         credential_ciphertext=_encrypt(data.credential) if data.credential else None,
     )
     session.add(upstream)
-    record(session, caller, "upstream.added", data.id, f"{upstream.url} credential={'yes' if data.credential else 'no'}")
+    await session.flush()
+    admin_only = await _set_admin_only(session, upstream.id, data.admin_only_tools)
+    record(session, caller, "upstream.added", data.id,
+           f"{upstream.url} credential={'yes' if data.credential else 'no'} admin_only={admin_only or 'none'}")
     await session.commit()
     await session.refresh(upstream)
-    return _upstream_view(upstream)
+    return _upstream_view(upstream, admin_only)
 
 
 @router.patch("/upstreams/{upstream_id}", response_model=UpstreamView)
@@ -327,13 +354,17 @@ async def edit_upstream(
         summary.append("credential=replaced" if changes["credential"] else "credential=removed")
     if upstream.credential_ciphertext and not upstream.auth_header:
         raise HTTPException(422, "auth_header is required while a credential is stored")
+    if changes.get("admin_only_tools") is not None:
+        admin_only = await _set_admin_only(session, upstream.id, changes["admin_only_tools"])
+        summary.append(f"admin_only={','.join(admin_only) or 'none'}")
     action = "upstream.disabled" if changes.get("enabled") is False else (
-        "upstream.enabled" if changes.get("enabled") is True and len(summary) == 1 else "upstream.edited")
+        "upstream.enabled" if changes.get("enabled") is True and len(summary) == 1 else
+        "upstream.tool_policy" if list(changes) == ["admin_only_tools"] else "upstream.edited")
     record(session, caller, action, upstream.id, ", ".join(summary) or None)
     await session.commit()
     await session.refresh(upstream)
     invalidate(upstream.id)
-    return _upstream_view(upstream)
+    return _upstream_view(upstream, (await _restricted(session)).get(upstream.id))
 
 
 @router.delete("/upstreams/{upstream_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -343,6 +374,7 @@ async def remove_upstream(
     upstream = await session.get(Upstream, upstream_id)
     if upstream is None:
         raise HTTPException(404, "Upstream not found")
+    await _set_admin_only(session, upstream_id, [])
     await session.delete(upstream)
     record(session, caller, "upstream.removed", upstream_id)
     await session.commit()
@@ -351,21 +383,27 @@ async def remove_upstream(
 
 @router.get("/upstreams/status", response_model=list[UpstreamStatus])
 async def upstream_status(
-    _: Caller = Depends(current_caller), session: AsyncSession = Depends(get_session)
+    caller: Caller = Depends(current_caller), session: AsyncSession = Depends(get_session)
 ) -> list[UpstreamStatus]:
-    """Live health of every upstream, checked concurrently (each check has its own timeout)."""
+    """Live health of every upstream, checked concurrently (each check has its own timeout).
+
+    Members do not see the names of admin-only tools; admins see which tools are restricted.
+    """
     rows = (await session.scalars(select(Upstream).order_by(Upstream.name))).all()
+    restricted = await _restricted(session)
 
     async def inspect(upstream: Upstream) -> UpstreamStatus:
         if not upstream.enabled:
             return UpstreamStatus(id=upstream.id, name=upstream.name, enabled=False, status="Disabled", tools=[])
         discovery = await discover_tools(UpstreamTarget.from_model(upstream), use_cache=False)
+        hidden = set() if caller.is_admin else set(restricted.get(upstream.id, []))
         return UpstreamStatus(
             id=upstream.id,
             name=upstream.name,
             enabled=True,
             status="Connected" if discovery.reachable else "Unreachable",
-            tools=[tool.name for tool in discovery.tools],
+            tools=[tool.name for tool in discovery.tools if tool.name not in hidden],
+            admin_only_tools=restricted.get(upstream.id, []) if caller.is_admin else [],
             error=discovery.error,
             latency_ms=discovery.latency_ms,
             checked_at=datetime.fromtimestamp(discovery.checked_at, tz=timezone.utc),

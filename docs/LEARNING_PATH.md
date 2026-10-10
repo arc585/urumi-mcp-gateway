@@ -12,6 +12,7 @@ Notes written milestone by milestone while building (read in order):
 | 6 | `07-chat-agent.md` | LLM tool loop, prompt injection, provider quotas |
 | 7 | `DEMO_CHECKLIST.md` | the definition of done, step by step |
 | 8 | `PRODUCTION.md`, `OPERATIONS.md` | k3s, TLS, existing Secrets, upgrades, rollback, backups |
+| 9 | `08-hardening.md` | tool permissions, deny-by-default and egress NetworkPolicies, rate limits |
 
 The original plan follows.
 

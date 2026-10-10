@@ -110,3 +110,10 @@ imagePullSecrets:
   {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end -}}
+
+{{/* Pod selector for one component, for NetworkPolicy "to:"/"from:" rules: include "urumi.podsOf" (list . "postgres") */}}
+{{- define "urumi.podsOf" -}}
+podSelector:
+  matchLabels:
+    {{- include "urumi.selectorLabels" . | nindent 4 }}
+{{- end -}}

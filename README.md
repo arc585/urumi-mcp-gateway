@@ -26,14 +26,14 @@ Only the gateway can reach the MCP servers (ClusterIP + NetworkPolicies). Tools 
 | System design and trade-offs | `docs/ARCHITECTURE.md` |
 | Threat model | `docs/THREAT_MODEL.md` |
 | Upgrades, rollback, backups | `docs/OPERATIONS.md` |
-| Definition-of-done demo | `docs/DEMO_CHECKLIST.md` (manual), `scripts/verify_dod.py` (automated, 28/28 PASS) |
+| Definition-of-done demo | `docs/DEMO_CHECKLIST.md` (manual), `scripts/verify_dod.py` (automated, all checks PASS) |
 | Demo video outline | `docs/DEMO_VIDEO.md` |
 | Source | `services/gateway` (gateway + chat agent), `services/woocommerce-mcp`, `services/demo-mcp`, `frontend` |
 | Helm chart | `deploy/helm/urumi` (`values-local.yaml`, `values-prod.yaml`) |
 
 Learning notes written while building, one per milestone: `docs/01-kubernetes-foundations.md`,
 `02-helm-chart.md`, `03-mcp-and-tool-routing.md`, `04-store-on-kubernetes.md`, `05-gateway-and-access-control.md`,
-`06-dashboard.md`, `07-chat-agent.md`.
+`06-dashboard.md`, `07-chat-agent.md`, `08-hardening.md`.
 
 ## Local setup (Kind)
 
@@ -69,6 +69,16 @@ helm upgrade --install urumi deploy/helm/urumi -n urumi -f deploy/helm/urumi/val
 # 5. Verify
 .venv/bin/python scripts/verify_dod.py --preflight
 ```
+
+### Local domain approach
+
+`store.urumi.test` and `app.urumi.test` are mapped to `127.0.0.1` in `/etc/hosts`. `.test` is a reserved TLD
+(RFC 6761), so these names can never collide with real domains. Kind publishes the node's ports 80/443 on
+`127.0.0.1:8880`/`8843` (`kind-config.yaml`; 80/443 were in use on the development Mac and binding to 127.0.0.1 keeps
+the cluster private to the laptop), and Traefik routes by `Host`. WordPress's site URL and the gateway's allowed
+hosts/origins are built from the same Helm values (`ingress.publicPort`, `store.host`, `gateway.host`), so changing
+the domain or port is a values change. Alternatives considered: `*.nip.io` (needs internet DNS) and `*.localhost`
+(not resolved by every MCP client).
 
 | URL | What |
 |---|---|
@@ -107,14 +117,14 @@ revisions 8 ↔ 10).
 ## Tests and verification
 
 ```sh
-.venv/bin/python -m pytest services/gateway/tests -q     # 24 end-to-end tests: real processes, fake LLM
-.venv/bin/python scripts/verify_dod.py                    # live definition of done against the cluster (28 checks)
+.venv/bin/python -m pytest services/gateway/tests -q     # 29 end-to-end tests: real processes, fake LLM
+.venv/bin/python scripts/verify_dod.py                    # live definition of done + hardening checks against the cluster
 helm lint deploy/helm/urumi -f deploy/helm/urumi/values-prod.yaml
 ```
 
 ## Definition of done — status
 
-All verified live on the local cluster (`scripts/verify_dod.py`, 28/28):
+All verified live on the local cluster (`scripts/verify_dod.py`):
 
 - Storefront order with Cash on delivery, visible in WooCommerce admin.
 - User A: assistant creates a product → on the storefront → bought → "today's orders" returns it.
@@ -127,12 +137,14 @@ All verified live on the local cluster (`scripts/verify_dod.py`, 28/28):
 
 | Item | What | Where |
 |---|---|---|
-| Security hardening | SSRF guard for admin-entered URLs (metadata/loopback/private blocked, HTTPS only, no redirects); NetworkPolicy per component (verified); non-root, read-only root FS, dropped capabilities; upstream credentials encrypted at rest (Fernet); hashed keys with pepper; CSP on the dashboard; DNS-rebinding (Host) checks on every MCP server | `services/gateway/app/upstream_url.py`, `security.py`, chart templates, `docs/THREAT_MODEL.md` |
+| Security hardening | SSRF guard for admin-entered URLs (metadata/loopback/private blocked, HTTPS only, no redirects); **deny-by-default NetworkPolicies in both directions** with per-component allows — the gateway cannot reach metadata/private ranges, an MCP server only its backend (verified from inside the Pods); non-root, read-only root FS, dropped capabilities, no service-account tokens (no Kubernetes API access to minimise); upstream credentials encrypted at rest (Fernet); hashed keys with pepper; CSP on the dashboard; DNS-rebinding (Host) checks | `docs/08-hardening.md`, `templates/networkpolicy-default-deny.yaml`, `services/gateway/app/upstream_url.py`, `security.py`, `docs/THREAT_MODEL.md` |
+| Tool permissions | Per-role: admins mark tools *admins only* (default `update_order_status`); hidden from members' tool lists (MCP + assistant), refused and audited if called by name | `docs/08-hardening.md`, dashboard → MCP servers → Edit |
+| Scaling (partial) | Per-user rate limits (60 tool calls/min, 10 assistant messages/min); stateless gateway ready for replicas (limits are per replica) | `services/gateway/app/ratelimit.py`, `gateway.rateLimits` |
 | Upgrades and rollback | Documented and demonstrated `helm rollback` (8 ↔ 10), backup/restore commands verified, zero-downtime rollouts (`preStop`, 150/150 requests during a rollout) | `docs/OPERATIONS.md` |
 | Production-like deployment | `values-prod.yaml` (TLS, k3s ingress namespace, local-path, existing Secrets, pull secrets), server-side validated; CI building multi-arch images | `docs/PRODUCTION.md`, `.github/workflows/ci.yml` |
 | Observability (partial) | Per-upstream live status with latency and failure reason; audit log with durations and errors | dashboard *MCP servers*, *Audit log* |
 
-Not attempted: multi-store provisioning, OAuth on the gateway, per-role tool permissions, rate limits, many-tools search.
+Not attempted: multi-store provisioning, OAuth on the gateway, many-tools search, hosted MCP servers, metrics.
 
 ## Repository map
 

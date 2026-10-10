@@ -19,7 +19,7 @@ from .api import router
 from .chat import router as chat_router
 from .db import Base, SessionLocal, engine
 from .gateway_mcp import MCPAuthMiddleware, gateway_server
-from .models import ApiKey, Setting, Upstream, User
+from .models import AdminOnlyTool, ApiKey, Setting, Upstream, User
 from .security import encrypt_upstream_credential, hash_api_key
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -71,6 +71,19 @@ async def _seed() -> None:
                     )
                 )
                 log.info("Seeded upstream %s", item["id"])
+        await session.flush()
+
+        # 3. Default tool permissions, e.g. {"woocommerce": ["update_order_status"]}: admin-only tools.
+        #    Seeded once (also on existing installs); admins change them in the dashboard afterwards.
+        policies = json.loads(os.getenv("DEFAULT_ADMIN_ONLY_TOOLS", "{}"))
+        if policies and await _seed_once(session, "default_tool_policies"):
+            for upstream_id, tools in policies.items():
+                if await session.get(Upstream, upstream_id) is None:
+                    continue
+                for tool in tools:
+                    if await session.get(AdminOnlyTool, (upstream_id, tool)) is None:
+                        session.add(AdminOnlyTool(upstream_id=upstream_id, tool_name=tool))
+                log.info("Seeded admin-only tools for %s: %s", upstream_id, tools)
         await session.commit()
 
 

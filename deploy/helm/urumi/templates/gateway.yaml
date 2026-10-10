@@ -115,6 +115,12 @@ spec:
               value: {{ $gw.chat.timeoutSeconds | quote }}
             - name: CHAT_MAX_TOOL_ROUNDS
               value: {{ $gw.chat.maxToolRounds | quote }}
+            - name: DEFAULT_ADMIN_ONLY_TOOLS
+              value: {{ $gw.toolPolicies.adminOnly | toJson | quote }}
+            - name: RATE_LIMIT_TOOL_CALLS_PER_MINUTE
+              value: {{ $gw.rateLimits.toolCallsPerMinute | quote }}
+            - name: RATE_LIMIT_CHAT_MESSAGES_PER_MINUTE
+              value: {{ $gw.rateLimits.chatMessagesPerMinute | quote }}
             - name: UPSTREAM_DISCOVERY_TIMEOUT_SECONDS
               value: {{ $gw.upstreamTimeouts.discoverySeconds | quote }}
             - name: UPSTREAM_CALL_TIMEOUT_SECONDS

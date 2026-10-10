@@ -54,7 +54,7 @@ Gemini free tier allows only a few requests per minute: leave ~30–60 s between
 | | Do | Expect / point at |
 |---|---|---|
 | 4.1 | Terminal: `bash scripts/connect-claude-code.sh` → paste **B's key** at the hidden prompt | `urumi: http://app.urumi.test:8880/mcp (HTTP) - ✔ Connected` |
-| 4.2 | Claude Code desktop: **new session** in folder `urumi-mcp-gateway` → "What tools do you have from urumi?" | All 8 tools, `mcp__urumi__woocommerce__…`, `…store-info__…`, `…shipping-info__…` |
+| 4.2 | Claude Code desktop: **new session** in folder `urumi-mcp-gateway` → "What tools do you have from urumi?" | 7 tools: `mcp__urumi__woocommerce__…`, `…store-info__…`, `…shipping-info__…` (`update_order_status` is admin-only, so members don't see it; the admin sees 8) |
 | 4.3 | "List today's WooCommerce orders." (approve the tool) | Today's orders incl. N2 |
 | 4.4 | "For the newest order today, estimate shipping to its city." | Calls `woocommerce__get_order` **and** `shipping-info__estimate_shipping` — one prompt, two upstreams |
 
@@ -95,6 +95,17 @@ Alternative client: MCP Inspector (`npx @modelcontextprotocol/inspector`, Stream
 | 8.1 | Admin → **Audit log → Tool calls** | A's calls *via assistant*, B's *via MCP client*, each with server, tool, time, duration, result; failures with reason (disabled / unreachable) |
 | 8.2 | Filter by user **User B** | Only B's calls |
 | 8.3 | **Admin actions** tab | Invites of A and B, B's keys revoked, Shipping Info disabled/enabled — all by the admin |
+
+## 9. Hardening (stand-out items, optional in the video)
+
+| | Do | Expect / point at |
+|---|---|---|
+| 9.1 | Admin → MCP servers → WooCommerce → **Edit** → tick *admins only* on `create_product` → Save | 🔒 on the chip; Admin actions: `upstream.tool_policy` |
+| 9.2 | B's (or A's) client: list tools again; call `woocommerce__create_product` by name | Gone from the list; direct call → "restricted to admins" (audited) |
+| 9.3 | Untick it again (A needs it for §3) | |
+| 9.4 | `kubectl -n urumi get networkpolicy` | `default-deny` + per-component allows |
+| 9.5 | `kubectl -n urumi exec deploy/urumi-gateway -- python -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('169.254.169.254',80))"` | TimeoutError: the gateway cannot reach cloud metadata even if the SSRF check were bypassed |
+| 9.6 | Rate limits: 60 tool calls/min and 10 assistant messages/min per user (`gateway.rateLimits`) | Exceeding → "rate limit exceeded … retry in Ns", audited |
 
 ## After a rehearsal (reset)
 

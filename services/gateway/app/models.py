@@ -101,3 +101,15 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
+
+
+class AdminOnlyTool(Base):
+    """A tool that only admins may see and call. No row = available to every role.
+
+    Members don't get it in tools/list (MCP or chat) and a direct call is refused and audited.
+    """
+
+    __tablename__ = "admin_only_tools"
+
+    upstream_id: Mapped[str] = mapped_column(ForeignKey("upstreams.id", ondelete="CASCADE"), primary_key=True)
+    tool_name: Mapped[str] = mapped_column(String(256), primary_key=True)

@@ -24,7 +24,8 @@ from starlette.responses import JSONResponse
 
 from .auth import Caller, authenticate, extract_key
 from .db import SessionLocal
-from .models import ToolAudit, Upstream, now_utc
+from .models import AdminOnlyTool, ToolAudit, Upstream, now_utc
+from .ratelimit import tool_calls
 from .upstream_client import UpstreamError, UpstreamTarget, call_tool, discover_tools
 
 SEPARATOR = "__"
@@ -50,13 +51,26 @@ async def enabled_targets() -> list[UpstreamTarget]:
         return [UpstreamTarget.from_model(row) for row in rows.all()]
 
 
+async def admin_only_tools() -> set[tuple[str, str]]:
+    """(upstream_id, tool_name) pairs restricted to admins."""
+    async with SessionLocal() as session:
+        rows = await session.execute(select(AdminOnlyTool.upstream_id, AdminOnlyTool.tool_name))
+        return {(upstream_id, tool) for upstream_id, tool in rows.all()}
+
+
 async def list_tools_for(caller: Caller) -> list[Tool]:
-    """All tools of all enabled upstreams, discovered concurrently. Dead upstreams contribute nothing."""
+    """All tools of all enabled upstreams the caller may use, discovered concurrently.
+
+    Dead upstreams contribute nothing; admin-only tools are hidden from members.
+    """
+    restricted = set() if caller.is_admin else await admin_only_tools()
     targets = await enabled_targets()
     discoveries = await asyncio.gather(*(discover_tools(target) for target in targets))
     tools: list[Tool] = []
     for target, discovery in zip(targets, discoveries, strict=True):
         for remote in discovery.tools:
+            if (target.id, remote.name) in restricted:
+                continue
             description = f"[{target.name}] {remote.description or remote.name}"[:MAX_DESCRIPTION_CHARS]
             tools.append(
                 Tool(
@@ -100,6 +114,13 @@ async def call_tool_as(caller: Caller, name: str, arguments: dict[str, Any], cha
             result = _error_result(error)
         elif upstream is None or not upstream.enabled:
             error = f"Upstream '{upstream_id}' is not available (unknown or disabled)"
+            result = _error_result(error)
+        elif not caller.is_admin and await session.get(AdminOnlyTool, (upstream_id, tool_name)):
+            # Hidden from the member's tool list; a direct call by name is refused too.
+            error = f"'{name}' is restricted to admins"
+            result = _error_result(error)
+        elif not (allowance := tool_calls.allow(caller.user_id))[0]:
+            error = f"rate limit exceeded: too many tool calls, retry in {allowance[1]:.0f}s"
             result = _error_result(error)
         else:
             upstream_name = upstream.name

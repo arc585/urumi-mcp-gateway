@@ -1,0 +1,128 @@
+{{- if and .Values.networkPolicies.enabled .Values.networkPolicies.defaultDeny }}
+{{- $np := .Values.networkPolicies }}
+{{- $root := . }}
+# 1. Deny by default: every Pod in this namespace, both directions. The per-component policies
+#    (ingress) and the rules below (egress) are the only traffic allowed. Policies add up.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "default-deny") }}
+  labels:
+    {{- include "urumi.labels" (list . "network") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# 2. Every Pod may use cluster DNS (Service names resolve through CoreDNS).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "allow-dns") }}
+  labels:
+    {{- include "urumi.labels" (list . "network") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.dns.podLabels | nindent 14 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+{{- if .Values.gateway.enabled }}
+---
+# 3. Gateway egress: its database, the MCP servers, and the public internet over HTTPS (LLM provider,
+#    external MCP servers) — never private ranges or cloud metadata. Second layer behind the SSRF check.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "gateway-egress") }}
+  labels:
+    {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "gateway") | nindent 6 }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - {{- include "urumi.podsOf" (list . "postgres") | nindent 10 }}
+      ports:
+        - { port: 5432, protocol: TCP }
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - woocommerce-mcp
+                  {{- range .Values.demoMcp.servers }}
+                  - {{ .id }}-mcp
+                  {{- end }}
+      ports:
+        - { port: 8000, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $np.privateCidrs | nindent 14 }}
+      ports:
+        - { port: 443, protocol: TCP }
+{{- end }}
+{{- if .Values.woocommerceMcp.enabled }}
+---
+# 4. WooCommerce MCP egress: only the WordPress REST API. No database, no internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list . "woocommerce-mcp-egress") }}
+  labels:
+    {{- include "urumi.labels" (list . "woocommerce-mcp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list . "woocommerce-mcp") | nindent 6 }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - {{- include "urumi.podsOf" (list . "wordpress") | nindent 10 }}
+      ports:
+        - { port: 80, protocol: TCP }
+{{- end }}
+{{- if .Values.store.enabled }}
+{{- range $component := list "wordpress" "store-setup" }}
+---
+# 5. {{ $component }} egress: MariaDB, plus the internet for WordPress/WooCommerce downloads and updates.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "urumi.componentName" (list $root (printf "%s-egress" $component)) }}
+  labels:
+    {{- include "urumi.labels" (list $root $component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (list $root $component) | nindent 6 }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - {{- include "urumi.podsOf" (list $root "mariadb") | nindent 10 }}
+      ports:
+        - { port: 3306, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $np.privateCidrs | nindent 14 }}
+      ports:
+        - { port: 80, protocol: TCP }
+        - { port: 443, protocol: TCP }
+{{- end }}
+{{- end }}
+{{- /* Demo MCP servers, the dashboard, MariaDB and Postgres need no outbound traffic: DNS only (policy 2). */}}
+{{- end }}

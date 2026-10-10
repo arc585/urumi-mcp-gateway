@@ -236,8 +236,15 @@ def run(skip_chat: bool, keep: bool) -> None:
         # 4. User B: external MCP client with only the URL and B's key.
         names = mcp_tools(users["b"]["api_key"])
         prefixes = sorted({n.split("__")[0] for n in names})
-        check(len(names) >= 8 and prefixes == ["shipping-info", "store-info", "woocommerce"],
+        check(len(names) >= 7 and prefixes == ["shipping-info", "store-info", "woocommerce"],
               "user B: MCP client sees all enabled servers' tools", f"{len(names)} tools from {prefixes}")
+        admin_names = mcp_tools(admin_key)
+        check("woocommerce__update_order_status" in admin_names and "woocommerce__update_order_status" not in names,
+              "hardening: admin-only tool hidden from member B, visible to the admin",
+              f"admin {len(admin_names)} tools, member {len(names)}")
+        refused = mcp_call(users["b"]["api_key"], "woocommerce__update_order_status", {"order_id": order_id, "status": "completed"})
+        check(refused.is_error and "restricted to admins" in refused.content[0].text,
+              "hardening: member B calling it by name is refused", refused.content[0].text)
         listed = structured(mcp_call(users["b"]["api_key"], "woocommerce__list_orders", {"on_date": "today", "limit": 20}))
         check(a_order in [o["id"] for o in listed.get("orders", [])], "user B: queries today's orders", f"{listed.get('count')} orders today")
         detail = structured(mcp_call(users["b"]["api_key"], "woocommerce__get_order", {"order_id": a_order}))
@@ -285,6 +292,15 @@ def run(skip_chat: bool, keep: bool) -> None:
         kubectl("scale", "deploy/urumi-shipping-info-mcp", "--replicas=1")
         kubectl("rollout", "status", "deploy/urumi-shipping-info-mcp", "--timeout=120s")
         check(statuses(admin)["shipping-info"]["status"] == "Connected", "upstream back to Connected after scaling up")
+
+        # Hardening: deny-by-default egress from the gateway (second layer behind the SSRF check).
+        probe = ("import socket\nfor h,p in [('urumi-postgres',5432),('169.254.169.254',80),('urumi-mariadb',3306)]:\n"
+                 "    s=socket.socket(); s.settimeout(3)\n"
+                 "    try: s.connect((h,p)); print('OPEN')\n"
+                 "    except Exception: print('BLOCKED')")
+        reach = kubectl("exec", "deploy/urumi-gateway", "--", "python", "-c", probe).split()
+        check(reach == ["OPEN", "BLOCKED", "BLOCKED"], "hardening: gateway egress — own DB open; cloud metadata and store DB blocked",
+              f"postgres {reach[0]}, 169.254.169.254 {reach[1]}, mariadb {reach[2]}")
 
         # 8. Audit log: everything above, attributed correctly.
         rows_a = admin.get("/audit", user_id=users["a"]["id"], limit=50).json()

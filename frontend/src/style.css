@@ -51,3 +51,9 @@
 .suggestions{display:flex;flex-wrap:wrap;gap:8px;padding:6px 0 12px}
 .suggestions button{border:1px solid var(--line);background:#fff;border-radius:16px;padding:7px 12px;font-size:12px;color:#4d4e47}
 .suggestions button:hover{border-color:var(--green);color:var(--green)}
+
+/* ---- Hardening: tool permissions ---- */
+.tool-chips .admin-only{background:#f4f2fb;color:#6c5ad1;border-color:#e2dcf7}
+.tool-policy{border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:grid;gap:6px}
+.tool-policy legend{font-size:12px;font-weight:600;padding:0 4px}
+.tool-policy small{color:var(--muted);font-size:11px}

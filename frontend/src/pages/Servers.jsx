@@ -26,9 +26,15 @@ export function ServerRow({ server, compact = false, isAdmin, onEdit, onToggle, 
         {!compact && server.error && <div className="server-error">{server.error}</div>}
         {!compact && server.tools?.length > 0 && (
           <div className="tool-chips">
-            {server.tools.map((tool) => (
-              <span key={tool}>{`${server.id}__${tool}`}</span>
-            ))}
+            {server.tools.map((tool) =>
+              server.admin_only_tools?.includes(tool) ? (
+                <span key={tool} className="admin-only" title="Admins only: hidden from members, refused if called">
+                  🔒 {`${server.id}__${tool}`}
+                </span>
+              ) : (
+                <span key={tool}>{`${server.id}__${tool}`}</span>
+              ),
+            )}
           </div>
         )}
       </div>
@@ -65,6 +71,14 @@ function UpstreamForm({ initial, onSubmit, onCancel, busy }) {
     credential: '',
     removeCredential: false,
   });
+  const [adminOnly, setAdminOnly] = useState(() => new Set(initial?.admin_only_tools || []));
+  const toggleAdminOnly = (tool) =>
+    setAdminOnly((current) => {
+      const next = new Set(current);
+      if (next.has(tool)) next.delete(tool);
+      else next.add(tool);
+      return next;
+    });
   const set = (field) => (event) =>
     setForm((current) => ({ ...current, [field]: event.target.type === 'checkbox' ? event.target.checked : event.target.value }));
 
@@ -78,6 +92,9 @@ function UpstreamForm({ initial, onSubmit, onCancel, busy }) {
     // Credentials are write-only: blank keeps the stored value, "remove" clears it.
     if (form.credential) payload.credential = form.credential;
     else if (form.removeCredential) payload.credential = '';
+    const before = [...(initial?.admin_only_tools || [])].sort().join(',');
+    const after = [...adminOnly].sort();
+    if (editing && after.join(',') !== before) payload.admin_only_tools = after;
     onSubmit(payload);
   }
 
@@ -120,6 +137,18 @@ function UpstreamForm({ initial, onSubmit, onCancel, busy }) {
         />
         <small>Encrypted on the server. Never shown again, never sent to members or MCP clients.</small>
       </label>
+      {editing && initial?.tools?.length > 0 && (
+        <fieldset className="tool-policy span-2">
+          <legend>Tool permissions</legend>
+          <small>Admins-only tools are hidden from members (MCP clients and the assistant) and refused if called by name.</small>
+          {initial.tools.map((tool) => (
+            <label key={tool} className="checkbox-row">
+              <input type="checkbox" checked={adminOnly.has(tool)} onChange={() => toggleAdminOnly(tool)} />
+              <code>{`${initial.id}__${tool}`}</code> — admins only
+            </label>
+          ))}
+        </fieldset>
+      )}
       {editing && initial?.has_credential && (
         <label className="checkbox-row span-2">
           <input type="checkbox" checked={form.removeCredential} onChange={set('removeCredential')} />

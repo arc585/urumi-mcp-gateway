@@ -32,7 +32,7 @@
 | Demo MCPs | 2 × `Deployment` + `Service` (one image) | Store policies; shipping estimates (token-protected) |
 | Gateway | `Deployment` + `Service` + Ingress (`/api`, `/mcp`); Postgres `StatefulSet` + PVC | Auth, team/keys, upstream registry, aggregation and routing, audit, chat agent |
 | Dashboard | `Deployment` (nginx) + `Service` + Ingress (`/`) | Admin and member UI; holds no secrets |
-| Cross-cutting | `NetworkPolicy` per component, `Secret`s, probes, requests/limits, non-root, `preStop` | Isolation, credentials, health, zero-downtime rollouts |
+| Cross-cutting | Deny-by-default `NetworkPolicy` (ingress + egress) with per-component allows, `Secret`s, probes, requests/limits, non-root, `preStop` | Isolation, credentials, health, zero-downtime rollouts |
 
 All components run in one namespace (`urumi`) from one Helm chart (`deploy/helm/urumi`) with `values-local.yaml`
 (Kind) and `values-prod.yaml` (k3s).
@@ -98,7 +98,9 @@ tool, time, duration, outcome, error).
 - Gateway and MCP servers are stateless → raise `replicaCount` (sessions are not pinned; the tool cache is per
   replica, which only affects freshness).
 - Many tools: listings grow linearly; a "search tools, then call" meta-tool would keep the LLM context small.
-- Per-role tool permissions (e.g. only admins may `create_product`) would slot into `list_tools_for` / `call_tool_as`.
+- Per-role tool permissions and per-user rate limits are enforced in `list_tools_for` / `call_tool_as`, the single
+  path shared by MCP clients and the assistant (`docs/08-hardening.md`). Rate-limit buckets are per replica; a
+  shared store would be needed for exact limits across replicas.
 - Multi-store: one release (or set of namespaced resources) per store, auto-registering its WooCommerce MCP as an
   upstream with id `store-<name>`.
 

@@ -105,6 +105,10 @@ def stack(tmp_path_factory):
             # The primary model is "out of quota", so every chat test also exercises the fallback.
             "LLM_MODEL": "exhausted-model",
             "LLM_FALLBACK_MODELS": "fake-model",
+            # Hardening: a seeded admin-only tool, and low limits so the tests can hit them quickly.
+            "DEFAULT_ADMIN_ONLY_TOOLS": json.dumps({"store-info": ["list_store_info_topics"]}),
+            "RATE_LIMIT_TOOL_CALLS_PER_MINUTE": "25",
+            "RATE_LIMIT_CHAT_MESSAGES_PER_MINUTE": "3",
         }
         log = tmp / "gateway.log"
         proc = _start("app.main:app", ROOT / "services" / "gateway", ports["gateway"], gateway_env, log)

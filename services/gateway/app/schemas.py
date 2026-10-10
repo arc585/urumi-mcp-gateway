@@ -60,6 +60,8 @@ class UpstreamCreate(BaseModel):
     enabled: bool = True
     auth_header: str | None = Field(default=None, max_length=120)
     credential: str | None = Field(default=None, max_length=4096)
+    # Tool names (without the <id>__ prefix) that only admins may see and call.
+    admin_only_tools: list[str] = Field(default_factory=list, max_length=200)
 
 
 class UpstreamUpdate(BaseModel):
@@ -69,6 +71,8 @@ class UpstreamUpdate(BaseModel):
     auth_header: str | None = Field(default=None, max_length=120)
     # Write-only: a new value replaces the stored credential; "" removes it; omitted keeps it.
     credential: str | None = Field(default=None, max_length=4096)
+    # Replaces the set of admin-only tools when present.
+    admin_only_tools: list[str] | None = Field(default=None, max_length=200)
 
 
 class UpstreamView(BaseModel):
@@ -80,6 +84,7 @@ class UpstreamView(BaseModel):
     enabled: bool
     auth_header: str | None
     has_credential: bool
+    admin_only_tools: list[str] = []
     updated_at: datetime
 
 
@@ -97,6 +102,7 @@ class UpstreamStatus(BaseModel):
     enabled: bool
     status: Literal["Connected", "Unreachable", "Disabled"]
     tools: list[str]
+    admin_only_tools: list[str] = []  # shown to admins; members never see restricted tools at all
     error: str | None = None
     latency_ms: int | None = None
     checked_at: datetime | None = None

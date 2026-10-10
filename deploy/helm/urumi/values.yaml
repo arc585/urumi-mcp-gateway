@@ -29,6 +29,23 @@ networkPolicies:
   # Namespace where the ingress controller's Pods run: "traefik" on our Kind setup,
   # "kube-system" on k3s (which installs Traefik there).
   ingressControllerNamespace: traefik
+  # Deny all traffic by default, in both directions, then allow only what each component needs
+  # (templates/networkpolicy-default-deny.yaml). Egress rules stop a compromised Pod from reaching
+  # databases, other services, cloud metadata, or the internet.
+  defaultDeny: true
+  # Cluster DNS, which every Pod may use (k8s-app=kube-dns in kube-system on Kind and k3s).
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+  # Never "the internet": private, loopback, link-local (cloud metadata 169.254.169.254), CGNAT.
+  privateCidrs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 100.64.0.0/10
+    - 127.0.0.0/8
 
 # ---------------------------------------------------------------------------
 # Store: WordPress + WooCommerce + MariaDB
@@ -184,6 +201,16 @@ gateway:
     apiKeySecretKey: api-key
     timeoutSeconds: 60
     maxToolRounds: 6
+  # Tools only admins may see and call, seeded once per install (then managed in the dashboard).
+  # create_product stays open by default: the definition of done has a *member* create a product via chat.
+  toolPolicies:
+    adminOnly:
+      woocommerce:
+        - update_order_status
+  # Per-user token buckets (per gateway replica). 0 disables a limit.
+  rateLimits:
+    toolCallsPerMinute: 60
+    chatMessagesPerMinute: 10
   upstreamTimeouts:
     discoverySeconds: 5   # tools/list and health checks, per upstream
     callSeconds: 30       # one tools/call, including connect + initialize

@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from .api import current_caller
 from .auth import Caller
 from .gateway_mcp import call_tool_as, list_tools_for, split_name
+from .ratelimit import chat_messages
 
 router = APIRouter(prefix="/api/v1")
 
@@ -181,6 +182,10 @@ async def _run_tool(caller: Caller, name: str, raw_arguments: str | None, known:
 async def chat(data: ChatRequest, caller: Caller = Depends(current_caller)) -> ChatResponse:
     if data.messages[-1].role != "user":
         raise HTTPException(422, "The last message must be from the user")
+    allowed, retry_after = chat_messages.allow(caller.user_id)
+    if not allowed:
+        raise HTTPException(429, f"Rate limit: too many assistant messages, retry in {retry_after:.0f}s",
+                            headers={"Retry-After": str(max(1, round(retry_after)))})
     client, models = _client()
     model = models[0]
 
