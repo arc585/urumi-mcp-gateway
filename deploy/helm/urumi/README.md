@@ -14,11 +14,11 @@ upgrades), or production points at Secrets you created (`*.existingSecret`).
 | `dashboard.yaml` | nginx Deployment/Service/Ingress (`/`) on the gateway host |
 | `networkpolicy-default-deny.yaml`, `store-networkpolicy.yaml` | Deny-by-default in both directions plus per-component allows; ACME solver allow when TLS is on |
 | `ingress-tls.yaml` | Traefik Middlewares for TLS deployments: HTTP→HTTPS redirect and HSTS |
-| `backup.yaml` | Nightly CronJob + PVC: `pg_dump`, `mariadb-dump`, `wp-content` archive, pruned after `backups.keepDays` |
+| `backup.yaml` | Backups PVC; nightly CronJob and a pre-upgrade/pre-rollback hook Job sharing one Pod spec (`pg_dump`, `mariadb-dump`, `wp-content` archive, pruned after `backups.keepDays`); mount-only init Job on first install |
 | `_helpers.tpl` | Names, labels, public URLs, Secret lookup, shared Ingress annotations |
 
 Release discipline: `Chart.yaml` `appVersion` == the image tags in `values-prod.yaml` == the git tag CI builds
-from (`v0.8.1` → `:0.8.1`). CI fails if any of the three disagree.
+from (`v0.8.1` → `:0.8.1`; the chart version moves on its own when only templates change). CI fails if any of the three disagree.
 
 ```sh
 helm lint deploy/helm/urumi -f deploy/helm/urumi/values-prod.yaml

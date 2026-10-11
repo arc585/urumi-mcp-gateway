@@ -55,10 +55,19 @@ Rebuilt the same `:dev` tag locally? Kubernetes cannot see the change: `kubectl 
 
 ### Scheduled (CronJob, `backups.enabled`)
 
-`urumi-backup` runs daily (`backups.schedule`) and writes three compressed files per run to its own PVC
-`urumi-backups`: `gateway-<stamp>.sql.gz` (`pg_dump`), `store-<stamp>.sql.gz` (`mariadb-dump`, single
-transaction), and `wp-content-<stamp>.tgz` (plugins, themes, uploads). Files older than `backups.keepDays` are
-pruned. The Job runs as the database images' own users, may reach only the two databases (NetworkPolicy), and is
+Every backup writes three compressed files to the PVC `urumi-backups`: `gateway-<stamp>.sql.gz` (`pg_dump`),
+`store-<stamp>.sql.gz` (`mariadb-dump`, single transaction), and `wp-content-<stamp>.tgz` (plugins, themes,
+uploads); files older than `backups.keepDays` are pruned. Backups run:
+
+- **nightly** (CronJob `urumi-backup`, `backups.schedule`);
+- **before every `helm upgrade` and `helm rollback`** (hook Job `urumi-backup-pre-upgrade`, kept until the next
+  run for `kubectl logs`), which automates the "back up before risky upgrades" rule above;
+- **once at first install** as a mount-only init Job. Kind's `standard` and k3s' `local-path` StorageClasses bind
+  a volume only when a Pod first uses it, and `helm --wait` waits for every PVC to be Bound, so a volume nobody
+  mounts until 02:30 would hang the install (found live: revision 15 failed exactly that way). The chart uses
+  `lookup` to render the hook when the volume exists and the init Job when it does not.
+
+The backup Pod runs as the database images' own users, may reach only the two databases (NetworkPolicy), and is
 scheduled onto the WordPress node because that volume is ReadWriteOnce.
 
 ```sh
@@ -72,8 +81,8 @@ sudo rsync -a /var/lib/rancher/k3s/storage/pvc-*_urumi_urumi-backups/ user@backu
 Restore from a scheduled dump: copy the file out of the volume (from the node directory above, or with a
 temporary Pod that mounts the PVC), then `gunzip -c store-<stamp>.sql.gz | …` into the restore command below.
 
-Added with chart 0.8.2 while the local cluster was stopped: rendered, linted and reviewed, first live run pending.
-Run `backup-now` after the next `helm upgrade` and keep its log.
+Verified on the local cluster (chart 0.8.3): `backup-now` and the pre-upgrade hook each produced the three files
+(gateway dump ≈ 12 KB, store dump ≈ 230 KB, wp-content ≈ 31 MB) in under 15 s.
 
 ### Manual (verified on the local cluster)
 

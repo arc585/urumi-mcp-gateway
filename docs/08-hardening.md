@@ -108,10 +108,11 @@ a warning on every apply, not a rejection. The labels are applied when the names
 
 ## 7. Scheduled backups
 
-`backups.enabled` (on in both values files) adds a CronJob that dumps Postgres and MariaDB and archives
-`wp-content` onto a dedicated PVC, keeping `backups.keepDays` of history (`docs/OPERATIONS.md`). Its Pod can reach
-only the two databases, runs as the database images' own users with every capability dropped, and mounts the
-WordPress volume read-only.
+`backups.enabled` (on in both values files) dumps Postgres and MariaDB and archives `wp-content` onto a dedicated
+PVC, keeping `backups.keepDays` of history: nightly (CronJob) and before every `helm upgrade`/`rollback` (hook Job),
+with a mount-only init Job on first install so the volume binds and `helm --wait` can finish on
+WaitForFirstConsumer storage classes (`docs/OPERATIONS.md`). The backup Pod can reach only the two databases,
+runs as the database images' own users with every capability dropped, and mounts the WordPress volume read-only.
 
 ## Tests
 
