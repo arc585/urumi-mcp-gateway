@@ -48,6 +48,19 @@ would only show "Error executing tool …".
 `WOOCOMMERCE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET` (from the Secret),
 `WOOCOMMERCE_TIMEOUT_SECONDS`, `STORE_PUBLIC_URL`, `STORE_TIMEZONE`, `MCP_ALLOWED_HOSTS`.
 
+## Tests
+
+```sh
+.venv/bin/python -m pytest services/woocommerce-mcp/tests -q
+```
+
+`tests/fake_woocommerce.py` is a fake WooCommerce REST API with the real quirks (Basic auth only when the request
+claims HTTPS, internal `https://` permalinks, naive-UTC `date_created_gmt`, `{code, message}` errors) and a
+`/_last` endpoint that returns the most recent request. The tests start it and the MCP server as real processes
+and check the five tools' schemas, the auth and `X-Forwarded-Proto` headers, public-URL rewriting, the UTC
+bounds sent for `on_date=today`, data minimisation in `get_order`, readable errors (404, timeout, bad input),
+and the Host-header check.
+
 ## Run it locally against the cluster's store
 
 ```sh

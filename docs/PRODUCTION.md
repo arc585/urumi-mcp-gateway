@@ -88,6 +88,9 @@ Random values are generated on the spot; nothing is typed or stored in files.
 
 ```sh
 kubectl create namespace urumi   # if not created above
+# Pod Security Admission: reject anything below baseline; warn on anything below restricted (only WordPress is).
+kubectl label namespace urumi pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted
 
 kubectl -n urumi create secret generic urumi-store-credentials \
   --from-literal=mariadb-root-password="$(openssl rand -hex 24)" \
@@ -133,6 +136,9 @@ curl -I https://store.<domain>/shop/                   # 200, valid certificate
 curl -s -o /dev/null -w '%{http_code}\n' https://app.<domain>/mcp     # 401 without a key
 curl -sI http://app.<domain>/mcp | head -1                           # 308: plain HTTP is redirected to HTTPS
 curl -sI https://app.<domain>/ | grep -i strict-transport            # HSTS header present
+kubectl -n urumi create job --from=cronjob/urumi-backup backup-now && \
+  kubectl -n urumi wait --for=condition=complete job/backup-now --timeout=15m && \
+  kubectl -n urumi logs job/backup-now --all-containers | tail -5    # first backup: three files listed
 kubectl -n urumi get secret urumi-gateway-credentials -o jsonpath='{.data.bootstrap-admin-key}' | base64 -d; echo
 
 URUMI_APP=https://app.<domain> URUMI_STORE=https://store.<domain> \
@@ -145,7 +151,8 @@ External MCP clients then use `https://app.<domain>/mcp` with a member key.
 ## Production limits of this single-node setup (and what to do next)
 
 - **One node, local disks:** `local-path` volumes live on the VPS disk; losing the VPS loses data unless backed up
-  (`docs/OPERATIONS.md` → backups). Next step: off-site backups on a schedule, or a block-storage CSI driver.
+  (`docs/OPERATIONS.md` → backups). The backup CronJob (`backups.enabled`) keeps its dumps on the same disk; copy them off the VPS on a
+  schedule (`docs/OPERATIONS.md`), or move to a block-storage CSI driver.
 - **Single replicas:** WordPress, MariaDB, and Postgres run one replica each. The gateway and MCP servers are
   stateless and could scale (`replicaCount`); WordPress would need shared (RWX) storage first.
 - **Secrets:** k3s `--secrets-encryption` encrypts them at rest; anyone with `get secret` RBAC in `urumi` can still

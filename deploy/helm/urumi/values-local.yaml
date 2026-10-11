@@ -9,3 +9,8 @@ store:
 
 gateway:
   host: app.urumi.test
+
+backups:
+  enabled: true
+  persistence:
+    size: 2Gi

@@ -20,6 +20,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.lock pytest
       - run: python -m pytest services/gateway/tests -q
+      - run: python -m pytest services/woocommerce-mcp/tests -q
       - uses: azure/setup-helm@v4
       - run: |
           helm lint deploy/helm/urumi -f deploy/helm/urumi/values-local.yaml

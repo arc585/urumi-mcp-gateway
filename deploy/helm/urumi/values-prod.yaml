@@ -59,3 +59,9 @@ postgres:
   persistence:
     storageClass: local-path
     size: 5Gi
+
+backups:
+  enabled: true
+  persistence:
+    storageClass: local-path
+    size: 10Gi

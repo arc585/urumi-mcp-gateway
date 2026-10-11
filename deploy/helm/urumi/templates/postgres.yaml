@@ -120,6 +120,11 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "urumi.selectorLabels" (list . "gateway") | nindent 14 }}
+        {{- if .Values.backups.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (list . "backup") | nindent 14 }}
+        {{- end }}
       ports:
         - port: postgres
 {{- end }}

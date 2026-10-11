@@ -1,0 +1,143 @@
+{{- if .Values.backups.enabled }}
+{{- $name := include "urumi.componentName" (list . "backup") }}
+{{- $b := .Values.backups }}
+# Scheduled backups: consistent dumps of both databases plus the WordPress content, compressed onto a
+# volume of their own and pruned after backups.keepDays. Nothing leaves the cluster by itself: copy the
+# volume off the node on a schedule (docs/OPERATIONS.md → Backups).
+# Run one now:  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ $name }} backup-now
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}s
+  labels:
+    {{- include "urumi.labels" (list . "backup") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $b.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $b.persistence.size }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "urumi.labels" (list . "backup") | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            {{- include "urumi.selectorLabels" (list . "backup") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          {{- include "urumi.imagePullSecrets" . | nindent 10 }}
+          # The WordPress volume is ReadWriteOnce: run on the node where WordPress runs (as the setup Job does).
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      {{- include "urumi.selectorLabels" (list . "wordpress") | nindent 22 }}
+          securityContext:
+            runAsNonRoot: true
+            # Each container runs as its image's own user (postgres 70, mysql 999); they share the
+            # backups volume through this supplementary group.
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: postgres-and-content
+              image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+              imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  stamp=$(date -u +%Y-%m-%dT%H%MZ)
+                  pg_dump -h {{ include "urumi.componentName" (list . "postgres") }} -U {{ .Values.postgres.user }} \
+                    -f /tmp/gateway.sql {{ .Values.postgres.database }}
+                  gzip -c /tmp/gateway.sql > "/backups/gateway-$stamp.sql.gz"
+                  tar -C /var/www/html -czf "/backups/wp-content-$stamp.tgz" wp-content
+                  find /backups -name 'gateway-*.sql.gz' -mtime +{{ $b.keepDays }} -delete
+                  find /backups -name 'wp-content-*.tgz' -mtime +{{ $b.keepDays }} -delete
+                  ls -l /backups
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "urumi.gatewaySecretName" . }}
+                      key: postgres-password
+              securityContext:
+                runAsUser: 70
+                runAsGroup: 70
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: content
+                  mountPath: /var/www/html
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+            - name: mariadb
+              image: "{{ .Values.store.mariadb.image.repository }}:{{ .Values.store.mariadb.image.tag }}"
+              imagePullPolicy: {{ .Values.store.mariadb.image.pullPolicy }}
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  stamp=$(date -u +%Y-%m-%dT%H%MZ)
+                  mariadb-dump -h {{ include "urumi.componentName" (list . "mariadb") }} -uroot --single-transaction \
+                    --result-file=/tmp/store.sql {{ .Values.store.mariadb.database }}
+                  gzip -c /tmp/store.sql > "/backups/store-$stamp.sql.gz"
+                  find /backups -name 'store-*.sql.gz' -mtime +{{ $b.keepDays }} -delete
+                  ls -l /backups
+              env:
+                # Read by the MariaDB client, so the password never appears on a command line.
+                - name: MYSQL_PWD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "urumi.storeSecretName" . }}
+                      key: mariadb-root-password
+              securityContext:
+                runAsUser: 999
+                runAsGroup: 999
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ $name }}s
+            - name: content
+              persistentVolumeClaim:
+                claimName: {{ include "urumi.componentName" (list . "wordpress") }}
+            - name: tmp
+              emptyDir: {}
+{{- end }}

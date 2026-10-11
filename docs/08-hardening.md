@@ -97,9 +97,27 @@ Two gaps only appear with `ingress.tls.enabled`, which Kind never exercises:
   travelled in cleartext. Two Traefik Middlewares (`templates/ingress-tls.yaml`), attached to every Ingress,
   redirect HTTP to HTTPS (308) and add `Strict-Transport-Security`.
 
+## 6. Pod Security Admission (namespace labels)
+
+Kubernetes enforces the Pod Security Standards per namespace through three labels. `urumi` is labelled
+`enforce=baseline` (no privileged Pods, host namespaces, hostPath, or added capabilities) and `warn=restricted` /
+`audit=restricted` (non-root, all capabilities dropped, seccomp set). Every workload in the chart meets
+`restricted` except WordPress, whose official image starts Apache as root before dropping to www-data; it draws
+a warning on every apply, not a rejection. The labels are applied when the namespace is created (README,
+`docs/PRODUCTION.md`), not by the chart, because Helm does not own the release namespace.
+
+## 7. Scheduled backups
+
+`backups.enabled` (on in both values files) adds a CronJob that dumps Postgres and MariaDB and archives
+`wp-content` onto a dedicated PVC, keeping `backups.keepDays` of history (`docs/OPERATIONS.md`). Its Pod can reach
+only the two databases, runs as the database images' own users with every capability dropped, and mounts the
+WordPress volume read-only.
+
 ## Tests
 
 `services/gateway/tests`: seeded admin-only tool hidden from members; admin-only tool hidden, refused, and audited,
 admins unaffected, members cannot change policies; the assistant only offers a member their tools; per-user tool
-and chat limits (independent buckets, `Retry-After`). 30 tests in total. `scripts/verify_dod.py` adds live checks
+and chat limits (independent buckets, `Retry-After`). 30 tests in total. `services/woocommerce-mcp/tests`: 13 tests against a fake WooCommerce REST API (REST key +
+`X-Forwarded-Proto`, link rewriting, store-local day bounds for "today", data minimisation, readable errors, Host
+check). `scripts/verify_dod.py` adds live checks
 for the tool permission and the gateway's egress.

@@ -51,7 +51,31 @@ Always: `helm template … | less` (review), back up (below), upgrade, watch, ve
 
 Rebuilt the same `:dev` tag locally? Kubernetes cannot see the change: `kubectl -n urumi rollout restart deploy/<name>`.
 
-## Backups (verified on the local cluster)
+## Backups
+
+### Scheduled (CronJob, `backups.enabled`)
+
+`urumi-backup` runs daily (`backups.schedule`) and writes three compressed files per run to its own PVC
+`urumi-backups`: `gateway-<stamp>.sql.gz` (`pg_dump`), `store-<stamp>.sql.gz` (`mariadb-dump`, single
+transaction), and `wp-content-<stamp>.tgz` (plugins, themes, uploads). Files older than `backups.keepDays` are
+pruned. The Job runs as the database images' own users, may reach only the two databases (NetworkPolicy), and is
+scheduled onto the WordPress node because that volume is ReadWriteOnce.
+
+```sh
+kubectl -n urumi create job --from=cronjob/urumi-backup backup-now          # run one now
+kubectl -n urumi wait --for=condition=complete job/backup-now --timeout=15m
+kubectl -n urumi logs job/backup-now --all-containers                      # each container ends with ls -l /backups
+# Copy the volume off the node (k3s local-path keeps it under /var/lib/rancher/k3s/storage/pvc-<id>_urumi_urumi-backups)
+sudo rsync -a /var/lib/rancher/k3s/storage/pvc-*_urumi_urumi-backups/ user@backup-host:/srv/urumi-backups/
+```
+
+Restore from a scheduled dump: copy the file out of the volume (from the node directory above, or with a
+temporary Pod that mounts the PVC), then `gunzip -c store-<stamp>.sql.gz | …` into the restore command below.
+
+Added with chart 0.8.2 while the local cluster was stopped: rendered, linted and reviewed, first live run pending.
+Run `backup-now` after the next `helm upgrade` and keep its log.
+
+### Manual (verified on the local cluster)
 
 ```sh
 D=$(date +%F)

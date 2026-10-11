@@ -14,6 +14,7 @@ upgrades), or production points at Secrets you created (`*.existingSecret`).
 | `dashboard.yaml` | nginx Deployment/Service/Ingress (`/`) on the gateway host |
 | `networkpolicy-default-deny.yaml`, `store-networkpolicy.yaml` | Deny-by-default in both directions plus per-component allows; ACME solver allow when TLS is on |
 | `ingress-tls.yaml` | Traefik Middlewares for TLS deployments: HTTP→HTTPS redirect and HSTS |
+| `backup.yaml` | Nightly CronJob + PVC: `pg_dump`, `mariadb-dump`, `wp-content` archive, pruned after `backups.keepDays` |
 | `_helpers.tpl` | Names, labels, public URLs, Secret lookup, shared Ingress annotations |
 
 Release discipline: `Chart.yaml` `appVersion` == the image tags in `values-prod.yaml` == the git tag CI builds

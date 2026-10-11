@@ -246,6 +246,26 @@ dashboard:
       cpu: 200m
       memory: 64Mi
 
+# ---------------------------------------------------------------------------
+# Backups: a nightly CronJob dumps both databases and archives wp-content onto its own volume
+# (templates/backup.yaml, docs/OPERATIONS.md). Run one now:
+#   kubectl -n urumi create job --from=cronjob/urumi-backup backup-now
+# ---------------------------------------------------------------------------
+backups:
+  enabled: false
+  schedule: "30 2 * * *"   # daily at 02:30 on the cluster's clock (UTC on most VPSs)
+  keepDays: 14
+  persistence:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 # Gateway database (users, hashed keys, encrypted upstream credentials, audit log).
 postgres:
   image:
