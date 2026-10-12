@@ -128,6 +128,13 @@ Tool-call audit rows older than `gateway.auditRetentionDays` (90) are deleted ho
 events are kept. The assistant returns each message's token usage (`usage` in the response, shown next to the
 model name in the UI, and logged with the user id), so cost per user is visible without a metrics stack.
 
+## 10. Image scanning
+
+CI scans every pushed image with Trivy (report only, HIGH and CRITICAL, unfixed ignored). The first scan of 0.8.2
+found 3 HIGH in each Python image (Debian base) and 68 findings in the dashboard image, all Alpine OS packages
+in the older `nginx-unprivileged:1.28-alpine` base with fixes available; 0.8.3 moves to `1.30-alpine`. Base-image
+bumps are the routine response: the application code is not where these CVEs live.
+
 ## Tests
 
 `services/gateway/tests`: seeded admin-only tool hidden from members; admin-only tool hidden, refused, and audited,

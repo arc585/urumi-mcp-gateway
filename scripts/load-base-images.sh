@@ -9,7 +9,7 @@ set -eu
 
 NODE=urumi-control-plane
 PLATFORM=linux/$(docker version --format '{{.Server.Arch}}')
-IMAGES="docker.io/library/python:3.12-slim docker.io/library/node:22-alpine docker.io/nginxinc/nginx-unprivileged:1.28-alpine"
+IMAGES="docker.io/library/python:3.12-slim docker.io/library/node:22-alpine docker.io/nginxinc/nginx-unprivileged:1.30-alpine"
 
 for ref in $IMAGES; do
   echo "== $ref"

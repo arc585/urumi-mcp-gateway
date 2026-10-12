@@ -17,7 +17,7 @@ Browser ── http://app.urumi.test:8880/ ──► Traefik
   It runs as uid 101 with a read-only root filesystem (writable `/tmp` only) and a NetworkPolicy that admits only
   the ingress controller.
 - **Build:** `node:22-alpine` runs `npm ci && npm run build`; the result is copied into
-  `nginxinc/nginx-unprivileged:1.28-alpine` (multi-stage Dockerfile, ~82 MB, no Node in the final image).
+  `nginxinc/nginx-unprivileged:1.30-alpine` (multi-stage Dockerfile, ~82 MB, no Node in the final image).
 
 ## Sign-in and the API key in the browser
 
