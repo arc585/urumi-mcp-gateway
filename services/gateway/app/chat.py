@@ -16,7 +16,9 @@ Provider: any OpenAI-compatible Chat Completions API (Google Gemini by default) 
 LLM_BASE_URL / LLM_MODEL; the key comes from the Kubernetes Secret via LLM_API_KEY.
 """
 
+import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -32,6 +34,7 @@ from .gateway_mcp import call_tool_as, list_tools_for, split_name
 from .ratelimit import chat_messages
 
 router = APIRouter(prefix="/api/v1")
+log = logging.getLogger("urumi.gateway.chat")
 
 MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "6"))
 MAX_CALLS_PER_ROUND = 8
@@ -84,6 +87,8 @@ class ChatResponse(BaseModel):
     reply: str
     tool_calls: list[ToolCallView]
     model: str
+    # Token usage summed over every model call this message needed: the only cost signal per user.
+    usage: dict[str, int] = Field(default_factory=dict)
 
 
 def clean_text(value: Any, limit: int) -> str:
@@ -132,6 +137,9 @@ def _tool_result_message(call_id: str, name: str, result: Any) -> dict[str, Any]
     return {"role": "tool", "tool_call_id": call_id, "content": json.dumps(payload, ensure_ascii=False)}
 
 
+_clients: dict[tuple[str, str | None], AsyncOpenAI] = {}
+
+
 def _client() -> tuple[AsyncOpenAI, list[str]]:
     api_key = os.getenv("LLM_API_KEY", "")
     if not api_key:
@@ -144,7 +152,14 @@ def _client() -> tuple[AsyncOpenAI, list[str]]:
     # Primary model first, then fallbacks (each provider model has its own free-tier quota).
     models = [os.getenv("LLM_MODEL", "gemini-3.5-flash")]
     models += [m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
-    return AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=LLM_TIMEOUT_SECONDS, max_retries=1), models
+    # One client (and connection pool) per process; rebuilt only if the key or URL changes.
+    client = _clients.get((api_key, base_url))
+    if client is None:
+        _clients.clear()
+        client = _clients[(api_key, base_url)] = AsyncOpenAI(
+            api_key=api_key, base_url=base_url, timeout=LLM_TIMEOUT_SECONDS, max_retries=1
+        )
+    return client, models
 
 
 async def _first_completion(client: AsyncOpenAI, models: list[str], **request: Any) -> tuple[Any, str]:
@@ -162,20 +177,38 @@ async def _first_completion(client: AsyncOpenAI, models: list[str], **request: A
     raise RuntimeError("no model configured")
 
 
-async def _run_tool(caller: Caller, name: str, raw_arguments: str | None, known: set[str]) -> tuple[dict, Any, str | None]:
-    """Run one model-requested tool call. Returns (arguments, result or None, error)."""
+async def _run_tool(caller: Caller, requested: Any, known: set[str]) -> tuple[ToolCallView, dict[str, Any]]:
+    """Run one model-requested tool call. Returns (what the UI shows, the tool message for the model)."""
+    name = requested.function.name
+    started = time.perf_counter()
+    result: Any = None
     try:
-        arguments = json.loads(raw_arguments or "{}")
+        arguments = json.loads(requested.function.arguments or "{}")
         if not isinstance(arguments, dict):
-            raise ValueError("arguments must be a JSON object")
-    except ValueError as exc:
-        return {}, None, f"invalid arguments from the model: {exc}"
-    if name not in known:
-        return arguments, None, f"unknown tool '{name}'"
-    # Same path as external MCP clients: routing, isolation, timeouts, audit — as this user.
-    result = await call_tool_as(caller, name, arguments, channel="chat")
-    error = clean_text(result.content[0].text if result.content else "tool error", 300) if result.is_error else None
-    return arguments, result, error
+            raise TypeError("arguments must be a JSON object")
+    except (ValueError, TypeError) as exc:
+        arguments, error = {}, f"invalid arguments from the model: {exc}"
+    else:
+        if name not in known:
+            error = f"unknown tool '{name}'"
+        else:
+            # Same path as external MCP clients: routing, isolation, timeouts, audit — as this user.
+            result = await call_tool_as(caller, name, arguments, channel="chat")
+            error = clean_text(result.content[0].text if result.content else "tool error", 300) if result.is_error else None
+    if result is None:
+        message = {"role": "tool", "tool_call_id": requested.id, "content": json.dumps({"is_error": True, "data": error})}
+    else:
+        message = _tool_result_message(requested.id, name, result)
+    upstream, tool = split_name(name) or ("?", name)
+    view = ToolCallView(name=name, upstream=upstream, tool=tool, arguments=arguments, ok=error is None, error=error,
+                        duration_ms=round((time.perf_counter() - started) * 1000))
+    return view, message
+
+
+def _add_usage(usage: dict[str, int], response: Any) -> None:
+    if getattr(response, "usage", None):
+        for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            usage[field] = usage.get(field, 0) + (getattr(response.usage, field, 0) or 0)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -207,6 +240,12 @@ async def chat(data: ChatRequest, caller: Caller = Depends(current_caller)) -> C
     ]
     messages += [{"role": turn.role, "content": turn.content} for turn in data.messages]
     calls: list[ToolCallView] = []
+    usage: dict[str, int] = {}
+
+    def finish(reply: str, rounds: int) -> ChatResponse:
+        log.info("chat user=%s model=%s rounds=%d tool_calls=%d tokens=%d",
+                 caller.user_id, model, rounds, len(calls), usage.get("total_tokens", 0))
+        return ChatResponse(reply=reply, tool_calls=calls, model=model, usage=usage)
 
     try:
         for round_number in range(MAX_TOOL_ROUNDS):
@@ -214,33 +253,24 @@ async def chat(data: ChatRequest, caller: Caller = Depends(current_caller)) -> C
                 response, model = await _first_completion(client, models, messages=messages, tools=llm_tools or None)
             else:
                 response = await client.chat.completions.create(model=model, messages=messages, tools=llm_tools or None)
+            _add_usage(usage, response)
             assistant = response.choices[0].message
             if not assistant.tool_calls:
-                return ChatResponse(reply=assistant.content or "(no answer)", tool_calls=calls, model=model)
+                return finish(assistant.content or "(no answer)", round_number + 1)
             # Keep the provider's full message (Gemini attaches signatures it needs on the next turn).
             messages.append(assistant.model_dump(exclude_none=True))
-            for index, requested in enumerate(assistant.tool_calls):
-                name = requested.function.name
-                if index >= MAX_CALLS_PER_ROUND:
+            requested_calls = list(assistant.tool_calls)
+            # The calls of one round are independent of each other: run them concurrently.
+            outcomes = await asyncio.gather(*(_run_tool(caller, item, known) for item in requested_calls[:MAX_CALLS_PER_ROUND]))
+            for index, requested in enumerate(requested_calls):
+                if index < MAX_CALLS_PER_ROUND:
+                    view, message = outcomes[index]
+                    calls.append(view)
+                    messages.append(message)
+                else:
                     messages.append({"role": "tool", "tool_call_id": requested.id,
                                      "content": json.dumps({"is_error": True, "data": "too many calls in one step"})})
-                    continue
-                started = time.perf_counter()
-                arguments, result, error = await _run_tool(caller, name, requested.function.arguments, known)
-                if result is None:
-                    messages.append({"role": "tool", "tool_call_id": requested.id,
-                                     "content": json.dumps({"is_error": True, "data": error})})
-                else:
-                    messages.append(_tool_result_message(requested.id, name, result))
-                upstream, tool = split_name(name) or ("?", name)
-                calls.append(ToolCallView(
-                    name=name, upstream=upstream, tool=tool, arguments=arguments, ok=error is None, error=error,
-                    duration_ms=round((time.perf_counter() - started) * 1000),
-                ))
-        return ChatResponse(
-            reply="I stopped after several tool steps without finishing. Please ask a narrower question.",
-            tool_calls=calls, model=model,
-        )
+        return finish("I stopped after several tool steps without finishing. Please ask a narrower question.", MAX_TOOL_ROUNDS)
     except APITimeoutError as exc:
         raise HTTPException(504, f"The model did not answer within {LLM_TIMEOUT_SECONDS:g}s.") from exc
     except APIConnectionError as exc:

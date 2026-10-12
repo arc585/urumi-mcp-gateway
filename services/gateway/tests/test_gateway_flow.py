@@ -6,10 +6,9 @@ import json
 import httpx
 import httpx2
 import pytest
+from conftest import SHIPPING_TOKEN
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
-
-from conftest import SHIPPING_TOKEN
 
 pytestmark = pytest.mark.anyio
 
@@ -253,6 +252,53 @@ async def test_slow_upstream_calls_do_not_hold_database_connections(stack):
     assert all(r.is_error and "timed out" in r.content[0].text for r in results)
 
 
+def test_restarting_the_gateway_does_not_reseed_twice(stack):
+    """A second gateway process on the same database (a restart, or a second replica) must find the
+    seed markers and change nothing: no duplicate bootstrap key, upstreams, or tool policies."""
+    from conftest import _free_port, _start, _wait_ready
+
+    before_keys = api(stack, stack["admin_key"]).get("/me/keys").json()
+    before_upstreams = api(stack, stack["admin_key"]).get("/upstreams").json()
+    port = _free_port()
+    log = stack["tmp"] / "gateway-second.log"
+    proc = _start("app.main:app", __import__("conftest").ROOT / "services" / "gateway", port, stack["gateway_env"], log)
+    try:
+        _wait_ready(f"http://127.0.0.1:{port}/health/ready", proc, log)
+        second = httpx.Client(base_url=f"http://127.0.0.1:{port}/api/v1", headers={"Authorization": f"Bearer {stack['admin_key']}"})
+        assert second.get("/me").status_code == 200  # same admin key works on the second process
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    assert api(stack, stack["admin_key"]).get("/me/keys").json() == before_keys
+    assert api(stack, stack["admin_key"]).get("/upstreams").json() == before_upstreams
+
+
+def test_old_audit_rows_are_pruned(stack):
+    """Rows older than AUDIT_RETENTION_DAYS (1 in tests) disappear; recent rows and admin events stay."""
+    import sqlite3
+    import time
+    import uuid
+
+    admin_id = api(stack, stack["admin_key"]).get("/me").json()["id"]
+    old_id, recent_id = str(uuid.uuid4()), str(uuid.uuid4())
+    with sqlite3.connect(stack["db_path"]) as db:
+        for row_id, age_days in ((old_id, 3), (recent_id, 0)):
+            db.execute(
+                "INSERT INTO tool_audit (id, user_id, api_key_id, channel, upstream_id, upstream_name, tool_name, "
+                "occurred_at, duration_ms, succeeded, error) VALUES (?, ?, NULL, 'mcp', 'store-info', 'Store Info', "
+                "'prune_probe', datetime('now', ?), 1, 1, NULL)",
+                (row_id, admin_id, f"-{age_days} days"),
+            )
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        ids = {row["id"] for row in api(stack, stack["admin_key"]).get("/audit", params={"limit": 500}).json()}
+        if old_id not in ids:
+            break
+        time.sleep(0.5)
+    assert old_id not in ids and recent_id in ids
+    assert api(stack, stack["admin_key"]).get("/admin-events").json()  # admin events are never pruned
+
+
 # --------------------------------------------------------------------------- chat agent
 
 
@@ -268,6 +314,7 @@ def test_chat_runs_tools_as_the_signed_in_user_and_treats_results_as_untrusted(s
     assert body["tool_calls"][1]["arguments"] == {"destination_city": "Bengaluru", "order_total": 1200}
 
     assert body["model"] == "fake-model"  # primary model was out of quota; the fallback answered
+    assert body["usage"]["total_tokens"] == 4  # two model calls, 2 tokens each (fake); summed per message
     report = json.loads(body["reply"].removeprefix("REPORT "))
     assert report["tool_results"] == 2 and report["all_labelled_untrusted"]
     assert report["system_prompt_present"] and report["descriptions_single_line"]

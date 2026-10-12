@@ -119,7 +119,7 @@ def chat(api: Api, message: str) -> dict:
             return response.json()
         detail = response.json().get("detail", "")
         if "429" in detail and attempt < 2:
-            print(f"      (model rate-limited; waiting 40 s and retrying)", flush=True)
+            print("      (model rate-limited; waiting 40 s and retrying)", flush=True)
             time.sleep(40)
             continue
         raise RuntimeError(f"chat failed: HTTP {response.status_code}: {detail}")
@@ -196,7 +196,7 @@ def run(skip_chat: bool, keep: bool) -> None:
             users[who] = response.json()
             check(response.status_code == 201 and users[who]["api_key"].startswith("urm_"),
                   f"admin: invite user {who.upper()}", f"{users[who].get('email')} (key shown once)")
-        user_a, user_b = Api(users["a"]["api_key"]), Api(users["b"]["api_key"])
+        user_a = Api(users["a"]["api_key"])  # user B only ever uses the MCP endpoint
 
         # 3. User A: create a product via the assistant, buy it, ask for today's orders.
         if not skip_chat:

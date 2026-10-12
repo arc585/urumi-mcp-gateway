@@ -122,7 +122,7 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "urumi.labels" (list . "wordpress") | nindent 4 }}
-  {{- with (include "urumi.ingressAnnotations" (list . true)) }}
+  {{- with (include "urumi.ingressAnnotations" (list . true (list))) }}
   annotations:
     {{- . | nindent 4 }}
   {{- end }}

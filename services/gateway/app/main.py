@@ -4,14 +4,15 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from datetime import timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mcp.server.transport_security import TransportSecuritySettings
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from starlette.middleware import Middleware
 
 from . import models  # noqa: F401  (registers ORM tables before create_all)
@@ -19,7 +20,7 @@ from .api import router
 from .chat import router as chat_router
 from .db import Base, SessionLocal, engine
 from .gateway_mcp import MCPAuthMiddleware, gateway_server
-from .models import AdminOnlyTool, ApiKey, Setting, Upstream, User
+from .models import AdminOnlyTool, ApiKey, Setting, ToolAudit, Upstream, User, now_utc
 from .security import encrypt_upstream_credential, hash_api_key
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -115,15 +116,71 @@ async def _wait_for_database(timeout_seconds: float = 120) -> None:
             delay = min(delay * 2, 10)
 
 
+SCHEMA_LOCK_ID = 20261010  # any constant; every replica must use the same one
+
+
+async def _initialise_schema_and_seed() -> None:
+    """Create missing tables and seed defaults, one replica at a time.
+
+    Several replicas starting against an empty database would all run create_all and insert the same
+    seed markers; the losers' commits fail and those Pods restart once. A Postgres session-level
+    advisory lock, held on its own connection across both steps, makes replicas take turns: the next
+    one finds the markers and does nothing. SQLite (tests, local development) has no advisory locks
+    and no replicas.
+    """
+    async with engine.connect() as lock_connection:
+        locked = lock_connection.dialect.name == "postgresql"
+        if locked:
+            await lock_connection.execute(text("SELECT pg_advisory_lock(:id)"), {"id": SCHEMA_LOCK_ID})
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+            await _seed()
+        finally:
+            if locked:
+                await lock_connection.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": SCHEMA_LOCK_ID})
+
+
+AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", "90"))
+AUDIT_PRUNE_INTERVAL_SECONDS = float(os.getenv("AUDIT_PRUNE_INTERVAL_SECONDS", "3600"))
+
+
+async def prune_audit(retention_days: int = AUDIT_RETENTION_DAYS) -> int:
+    """Delete tool-call audit rows older than the retention window; returns how many went.
+
+    Admin events are kept: they are few and security-relevant. 0 days disables pruning.
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = now_utc() - timedelta(days=retention_days)
+    async with SessionLocal() as session:
+        result = await session.execute(delete(ToolAudit).where(ToolAudit.occurred_at < cutoff))
+        await session.commit()
+        return result.rowcount or 0
+
+
+async def _prune_loop() -> None:
+    while True:
+        try:
+            removed = await prune_audit()
+            if removed:
+                log.info("Pruned %d tool-audit rows older than %d days", removed, AUDIT_RETENTION_DAYS)
+        except Exception:  # never let housekeeping take the gateway down
+            log.exception("Audit pruning failed")
+        await asyncio.sleep(AUDIT_PRUNE_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _wait_for_database()
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    await _seed()
-    async with gateway_server.session_manager.run():
-        yield
-    await engine.dispose()
+    await _initialise_schema_and_seed()
+    pruner = asyncio.create_task(_prune_loop())
+    try:
+        async with gateway_server.session_manager.run():
+            yield
+    finally:
+        pruner.cancel()
+        await engine.dispose()
 
 
 allowed_hosts = _csv("MCP_ALLOWED_HOSTS", "localhost:*,127.0.0.1:*")

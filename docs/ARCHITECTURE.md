@@ -96,7 +96,8 @@ tool, time, duration, outcome, error).
 ## Scaling and evolution
 
 - Gateway and MCP servers are stateless → raise `replicaCount` (sessions are not pinned; the tool cache is per
-  replica, which only affects freshness).
+  replica, which only affects freshness). Start-up is replica-safe: schema creation and seeding run under a
+  Postgres advisory lock, and no database session spans an upstream call.
 - Many tools: listings grow linearly; a "search tools, then call" meta-tool would keep the LLM context small.
 - Per-role tool permissions and per-user rate limits are enforced in `list_tools_for` / `call_tool_as`, the single
   path shared by MCP clients and the assistant (`docs/08-hardening.md`). Rate-limit buckets are per replica; a

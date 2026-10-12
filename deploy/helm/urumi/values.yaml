@@ -211,6 +211,11 @@ gateway:
     adminOnly:
       woocommerce:
         - update_order_status
+  # Largest request body Traefik forwards to the gateway (/api, /mcp), in bytes; 0 disables the limit.
+  # Tool arguments and chat messages are small; this stops a client from streaming gigabytes at the gateway.
+  maxRequestBodyBytes: 1048576
+  # Tool-call audit rows older than this are deleted hourly; admin events are kept. 0 keeps everything.
+  auditRetentionDays: 90
   # Per-user token buckets (per gateway replica). 0 disables a limit.
   rateLimits:
     toolCallsPerMinute: 60

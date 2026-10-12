@@ -32,6 +32,8 @@ Admin: `GET|POST /users`, `PATCH /users/{id}`, `GET|POST /users/{id}/keys`, `POS
 | `INTERNAL_UPSTREAM_HOSTS` | chart | SSRF allow-list of internal MCP Service names |
 | `UPSTREAM_*_SECONDS` | values | discovery / call / connect timeouts, tool cache |
 | `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS` | chart | DNS-rebinding protection, CORS for browser MCP clients |
+| `AUDIT_RETENTION_DAYS` | values | delete tool-call audit rows older than this, hourly (0 keeps everything) |
+| `UPSTREAM_URL_CHECK_CACHE_SECONDS` | default 60 | how long a URL's passing SSRF verdict is reused |
 
 ## Tests
 
@@ -41,5 +43,6 @@ Admin: `GET|POST /users`, `PATCH /users/{id}`, `GET|POST /users/{id}/keys`, `POS
 
 Starts the gateway (SQLite), two demo upstreams, a slow upstream, and a dead address as real processes, then checks
 auth, aggregation, isolation, timeouts, credential secrecy, audit attribution, revoke, disable, admin-only endpoints,
-SSRF, the last-admin guard, tool permissions, rate limits, the chat loop (fake model), and that slow upstreams
-never exhaust the database pool.
+SSRF, the last-admin guard, tool permissions, rate limits, the chat loop (fake model), that slow upstreams
+never exhaust the database pool, that a restart does not re-seed, and that old audit rows are pruned; plus unit
+tests for the token bucket and the SSRF URL check.

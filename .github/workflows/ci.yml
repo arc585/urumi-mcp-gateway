@@ -18,7 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.lock pytest
+      - run: pip install -r requirements.lock pytest ruff
+      - run: ruff check services scripts
       - run: python -m pytest services/gateway/tests -q
       - run: python -m pytest services/woocommerce-mcp/tests -q
       - uses: azure/setup-helm@v4
@@ -26,6 +27,13 @@ jobs:
           helm lint deploy/helm/urumi -f deploy/helm/urumi/values-local.yaml
           helm lint deploy/helm/urumi -f deploy/helm/urumi/values-prod.yaml
           helm template urumi deploy/helm/urumi -n urumi -f deploy/helm/urumi/values-prod.yaml > /dev/null
+      - name: Validate rendered manifests against the Kubernetes API schemas (kubeconform)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          for v in values-local.yaml values-prod.yaml; do
+            helm template urumi deploy/helm/urumi -n urumi -f deploy/helm/urumi/$v \
+              | ./kubeconform -strict -ignore-missing-schemas -summary   # Traefik CRDs have no public schema
+          done
       - name: Release consistency (production image tags == Chart appVersion)
         run: |
           app=$(sed -n 's/^appVersion: "\(.*\)"/\1/p' deploy/helm/urumi/Chart.yaml)
@@ -35,7 +43,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: cd frontend && npm ci && npm run build
+      - run: cd frontend && npm ci && npm audit --audit-level=high && npm run build
 
   images:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -74,3 +82,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ steps.tag.outputs.owner }}/${{ matrix.name }}:${{ steps.tag.outputs.version }}
+      - name: Scan the pushed image for known vulnerabilities (report only)
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          image-ref: ghcr.io/${{ steps.tag.outputs.owner }}/${{ matrix.name }}:${{ steps.tag.outputs.version }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true

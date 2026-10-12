@@ -104,7 +104,9 @@ Kubernetes enforces the Pod Security Standards per namespace through three label
 `audit=restricted` (non-root, all capabilities dropped, seccomp set). Every workload in the chart meets
 `restricted` except WordPress, whose official image starts Apache as root before dropping to www-data; it draws
 a warning on every apply, not a rejection. The labels are applied when the namespace is created (README,
-`docs/PRODUCTION.md`), not by the chart, because Helm does not own the release namespace.
+`docs/PRODUCTION.md`), not by the chart, because Helm does not own the release namespace. Applied on the local
+cluster: a server-side dry run of the whole chart warns only for the `wordpress` container (capabilities not dropped,
+not non-root), and nothing is rejected under `baseline`.
 
 ## 7. Scheduled backups
 
@@ -114,11 +116,24 @@ with a mount-only init Job on first install so the volume binds and `helm --wait
 WaitForFirstConsumer storage classes (`docs/OPERATIONS.md`). The backup Pod can reach only the two databases,
 runs as the database images' own users with every capability dropped, and mounts the WordPress volume read-only.
 
+## 8. Request body limit at the ingress
+
+`gateway.maxRequestBodyBytes` (1 MiB) renders a Traefik `buffering` Middleware attached to the gateway Ingress, so
+oversized bodies are refused with 413 before they reach the gateway (tool arguments and chat messages are a few
+KB). Verified live: a 2 MB POST to `/mcp` is refused; normal calls are unaffected.
+
+## 9. Audit retention and token usage
+
+Tool-call audit rows older than `gateway.auditRetentionDays` (90) are deleted hourly by the gateway itself; admin
+events are kept. The assistant returns each message's token usage (`usage` in the response, shown next to the
+model name in the UI, and logged with the user id), so cost per user is visible without a metrics stack.
+
 ## Tests
 
 `services/gateway/tests`: seeded admin-only tool hidden from members; admin-only tool hidden, refused, and audited,
 admins unaffected, members cannot change policies; the assistant only offers a member their tools; per-user tool
-and chat limits (independent buckets, `Retry-After`). 30 tests in total. `services/woocommerce-mcp/tests`: 13 tests against a fake WooCommerce REST API (REST key +
+and chat limits (independent buckets, `Retry-After`). 45 tests in total (end-to-end plus unit tests for the token bucket and the SSRF check, a restart/re-seed test, and
+audit pruning). `services/woocommerce-mcp/tests`: 13 tests against a fake WooCommerce REST API (REST key +
 `X-Forwarded-Proto`, link rewriting, store-local day bounds for "today", data minimisation, readable errors, Host
 check). `scripts/verify_dod.py` adds live checks
 for the tool permission and the gateway's egress.

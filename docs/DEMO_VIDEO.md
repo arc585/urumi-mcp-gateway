@@ -61,5 +61,5 @@ Volumes: MariaDB/Postgres StatefulSets + WordPress PVC; deleting a DB Pod kept t
 ## Closing (15 s)
 
 What I'd do next: confirm-before-write in chat driven by MCP tool annotations (`readOnlyHint`/`destructiveHint`), a
-shared rate-limit store for several gateway replicas, Alembic migrations run by a pre-upgrade Job, Prometheus metrics
-with LLM token usage, scheduled backups, multi-store provisioning.
+shared rate-limit store for several gateway replicas, Alembic migrations run by a pre-upgrade Job, Prometheus
+metrics, multi-store provisioning.

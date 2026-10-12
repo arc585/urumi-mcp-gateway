@@ -31,6 +31,9 @@ CALL_TIMEOUT_SECONDS = float(os.getenv("UPSTREAM_CALL_TIMEOUT_SECONDS", "30"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("UPSTREAM_CONNECT_TIMEOUT_SECONDS", "5"))
 TOOL_CACHE_SECONDS = float(os.getenv("UPSTREAM_TOOL_CACHE_SECONDS", "15"))
 FAILURE_CACHE_SECONDS = float(os.getenv("UPSTREAM_FAILURE_CACHE_SECONDS", "5"))
+# A URL that passed the SSRF check is trusted for this long before its DNS is resolved again. The
+# gateway's egress NetworkPolicy is the layer that actually stops rebinding; this only saves lookups.
+URL_CHECK_CACHE_SECONDS = float(os.getenv("UPSTREAM_URL_CHECK_CACHE_SECONDS", "60"))
 
 
 class UpstreamError(Exception):
@@ -70,13 +73,28 @@ class Discovery:
         return self.error is None
 
 
-_cache: dict[str, tuple[tuple[str, str | None, str | None], float, Discovery]] = {}
-_refreshing: set[str] = set()
+Fingerprint = tuple[str, str | None, str | None]
+_cache: dict[str, tuple[Fingerprint, float, Discovery]] = {}
+_inflight: dict[tuple[str, Fingerprint], asyncio.Task] = {}  # one probe per upstream at a time
 _background: set[asyncio.Task] = set()
+_url_checks: dict[str, float] = {}  # url -> monotonic time until which its passing SSRF verdict is trusted
 
 
 def invalidate(upstream_id: str) -> None:
     _cache.pop(upstream_id, None)
+
+
+async def _check_url(url: str) -> None:
+    """SSRF check, with passing verdicts cached briefly (a failing one is re-checked every time)."""
+    now = time.monotonic()
+    if _url_checks.get(url, 0.0) > now:
+        return
+    unsafe = await asyncio.to_thread(validate_upstream_url, url)
+    if unsafe:
+        raise UpstreamError(f"URL blocked: {unsafe}")
+    if len(_url_checks) > 1000:
+        _url_checks.clear()
+    _url_checks[url] = now + URL_CHECK_CACHE_SECONDS
 
 
 def _leaves(exc: BaseException) -> Iterator[BaseException]:
@@ -127,9 +145,7 @@ def _headers(target: UpstreamTarget) -> dict[str, str]:
 
 @asynccontextmanager
 async def _session(target: UpstreamTarget, timeout: float) -> AsyncIterator[Client]:
-    unsafe = await asyncio.to_thread(validate_upstream_url, target.url)
-    if unsafe:
-        raise UpstreamError(f"URL blocked: {unsafe}")
+    await _check_url(target.url)
     async with httpx2.AsyncClient(
         headers=_headers(target),
         timeout=httpx2.Timeout(timeout, connect=min(CONNECT_TIMEOUT_SECONDS, timeout)),
@@ -146,33 +162,35 @@ async def _session(target: UpstreamTarget, timeout: float) -> AsyncIterator[Clie
 async def discover_tools(target: UpstreamTarget, *, use_cache: bool = True) -> Discovery:
     """List an upstream's tools. Never raises: failures become Discovery.error.
 
-    A known-failed upstream is answered from cache immediately while one background task re-checks
-    it, so a dead server never slows tools/list for everyone (MCP clients typically list tools
-    before their first call). The dashboard's status view passes use_cache=False to check live.
+    Cached per upstream. An expired entry is answered immediately from the last result while one
+    background probe refreshes it (stale-while-revalidate), so neither a dead upstream nor a crowd of
+    simultaneous tools/list calls makes anyone wait. The dashboard's status view passes
+    use_cache=False to check live; concurrent live checks still share one probe (see _probe).
     """
     now = time.monotonic()
     cached = _cache.get(target.id)
     if use_cache and cached and cached[0] == target.fingerprint:
-        if cached[1] > now:
-            return cached[2]
-        if not cached[2].reachable:
-            if target.id not in _refreshing:
-                _refreshing.add(target.id)
-                task = asyncio.create_task(_refresh(target))
-                _background.add(task)
-                task.add_done_callback(_background.discard)
-            return cached[2]
+        if cached[1] <= now:
+            task = asyncio.create_task(_probe(target))
+            _background.add(task)
+            task.add_done_callback(_background.discard)
+        return cached[2]
     return await _probe(target)
 
 
-async def _refresh(target: UpstreamTarget) -> None:
-    try:
-        await _probe(target)
-    finally:
-        _refreshing.discard(target.id)
-
-
 async def _probe(target: UpstreamTarget) -> Discovery:
+    """Single-flight: callers that arrive while a probe of this upstream is running await that probe
+    instead of each opening their own MCP session to the same server."""
+    key = (target.id, target.fingerprint)
+    task = _inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_probe_now(target))
+        _inflight[key] = task
+        task.add_done_callback(lambda done: _inflight.pop(key, None) if _inflight.get(key) is done else None)
+    return await asyncio.shield(task)  # a cancelled caller must not cancel the shared probe
+
+
+async def _probe_now(target: UpstreamTarget) -> Discovery:
     started = time.perf_counter()
     try:
         async with asyncio.timeout(DISCOVERY_TIMEOUT_SECONDS):

@@ -5,7 +5,7 @@ on the very next request (no cached sessions to wait out).
 """
 
 from dataclasses import dataclass
-from datetime import timedelta, timezone
+from datetime import UTC, timedelta
 
 from sqlalchemy import select
 
@@ -57,7 +57,7 @@ async def authenticate(raw_key: str | None) -> Caller | None:
         now = now_utc()
         last_used = api_key.last_used_at
         if last_used is not None and last_used.tzinfo is None:  # SQLite drops tz info; values are UTC
-            last_used = last_used.replace(tzinfo=timezone.utc)
+            last_used = last_used.replace(tzinfo=UTC)
         if last_used is None or now - last_used > LAST_USED_WRITE_INTERVAL:
             api_key.last_used_at = now
             await session.commit()

@@ -12,7 +12,7 @@ It behaves like the real one where it matters to us:
 import asyncio
 import base64
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from starlette.applications import Starlette
@@ -27,7 +27,7 @@ TZ = ZoneInfo("Asia/Kolkata")
 
 def _gmt(day: date, hour: int) -> str:
     """Naive UTC string for <hour>:00 store-local time on <day>, as WooCommerce reports date_created_gmt."""
-    return datetime.combine(day, time(hour), tzinfo=TZ).astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+    return datetime.combine(day, time(hour), tzinfo=TZ).astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 TODAY = datetime.now(TZ).date()
@@ -96,7 +96,7 @@ async def create_product(request: Request) -> JSONResponse:
     product = {"id": 100 + len(STATE["products"]), "name": body["name"], "price": body.get("regular_price"),
                "status": body.get("status", "publish"), "stock_status": "instock",
                "permalink": f"{INTERNAL}/product/{body['name'].lower().replace(' ', '-')}/",
-               "date_created_gmt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")}
+               "date_created_gmt": datetime.now(UTC).replace(tzinfo=None).isoformat(timespec="seconds")}
     STATE["products"].append(product)
     return JSONResponse(product, status_code=201)
 

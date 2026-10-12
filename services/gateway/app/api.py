@@ -6,7 +6,7 @@ not a control: every admin endpoint depends on `require_admin`.
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
@@ -408,7 +408,7 @@ async def upstream_status(caller: Caller = Depends(current_caller)) -> list[Upst
             admin_only_tools=restricted.get(upstream.id, []) if caller.is_admin else [],
             error=discovery.error,
             latency_ms=discovery.latency_ms,
-            checked_at=datetime.fromtimestamp(discovery.checked_at, tz=timezone.utc),
+            checked_at=datetime.fromtimestamp(discovery.checked_at, tz=UTC),
         )
 
     return list(await asyncio.gather(*(inspect(row) for row in rows)))

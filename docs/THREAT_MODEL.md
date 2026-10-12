@@ -101,7 +101,7 @@ audit. A confirm-before-write step in the UI would be the next control.
 
 | Layer | Controls |
 |---|---|
-| Network | Ingress only for store/dashboard/gateway; ClusterIP-only MCP servers and databases; **deny-by-default NetworkPolicies in both directions** with explicit allows (verified: random Pods blocked; gateway cannot reach metadata, the store DB, or the Kubernetes API; the WooCommerce MCP can reach only WordPress); 127.0.0.1-only port binding locally |
+| Network | Ingress only for store/dashboard/gateway; ClusterIP-only MCP servers and databases; **deny-by-default NetworkPolicies in both directions** with explicit allows (verified: random Pods blocked; gateway cannot reach metadata, the store DB, or the Kubernetes API; the WooCommerce MCP can reach only WordPress); 127.0.0.1-only port binding locally; 1 MiB request-body limit on the gateway Ingress |
 | Kubernetes | Non-root containers, `allowPrivilegeEscalation: false`, capabilities dropped, read-only root FS for our services, no service-account tokens mounted, requests/limits, probes; Pod Security Admission on the namespace (`baseline` enforced, `restricted` warned: WordPress is the only workload below it, since Apache starts as root) |
 | Secrets | Kubernetes Secrets (generated or `existingSecret`), never in Git/values/chat; k3s `--secrets-encryption` in production; LLM key created by the operator |
 | Application | Hashed keys, encrypted credentials, server-side roles, per-role tool permissions, per-user rate limits, per-request identity, stateless revocation, SSRF guard, Host-header (DNS-rebinding) checks, timeouts and isolation, audit of tool calls and admin actions |

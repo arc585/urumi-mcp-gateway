@@ -6,7 +6,7 @@ Kubernetes Secret. The key belongs to a shop_manager user created by the store s
 """
 
 import os
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -95,7 +95,7 @@ def _local_iso(value: str | None) -> str | None:
     """WooCommerce's date_created_gmt (naive UTC) → ISO-8601 in the store's timezone."""
     if not value:
         return None
-    moment = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    moment = datetime.fromisoformat(value).replace(tzinfo=UTC)
     return moment.astimezone(_store_timezone()).isoformat(timespec="seconds")
 
 
@@ -114,7 +114,7 @@ def _resolve_day(value: str) -> date:
 def _utc_param(day: date, at: time) -> str:
     """Start/end of a store-local day, expressed in UTC for the REST API."""
     local = datetime.combine(day, at, tzinfo=_store_timezone())
-    return local.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+    return local.astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def _order_summary(order: dict[str, Any]) -> dict[str, Any]:

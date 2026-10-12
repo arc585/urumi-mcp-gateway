@@ -42,6 +42,8 @@ tools/call "woocommerce__get_order" → split at first "__" → upstream "woocom
 | Admin actions audited too | The definition of done says "all preceding actions" appear in the audit log: invites, key issue/revoke, upstream add/edit/disable/remove. |
 | Separate Postgres for the gateway | Different trust domain from the store's MariaDB. Waits for the DB at startup instead of crash-looping. |
 | **Database sessions never span an upstream call** | A session that has run a query pins one pooled connection until it commits, and the pool holds 15. Left open across a 30 s upstream call, 15 callers on one slow upstream would block every other request, including authentication and the readiness probe. `call_tool_as` reads policy in one short session, calls the upstream holding none, and audits in another; the status probe does the same (`docs/08-hardening.md` §4). |
+| Start-up takes a Postgres advisory lock | Several replicas starting on an empty database would all create tables and insert the seed markers; the losers crash once. `pg_advisory_lock` on a dedicated connection makes them take turns (SQLite, used in tests, has neither replicas nor the lock). |
+| Discovery is single-flight and stale-while-revalidate | Concurrent `tools/list` calls and dashboard tabs share one probe per upstream; an expired cache entry is answered at once while one background probe refreshes it. A URL's passing SSRF verdict is reused for 60 s (the egress NetworkPolicy is the real rebinding control). |
 
 ## Kubernetes resources added
 

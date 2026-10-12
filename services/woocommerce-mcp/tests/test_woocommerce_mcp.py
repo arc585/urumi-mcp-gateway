@@ -1,7 +1,7 @@
 """Behaviour of the WooCommerce MCP server against a fake WooCommerce REST API."""
 
 import json
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -32,7 +32,7 @@ def last_request(stack) -> dict:
 
 def utc_bound(day, at=time.min) -> str:
     """Store-local midnight expressed the way the MCP server must send it to WooCommerce (naive UTC)."""
-    return datetime.combine(day, at, tzinfo=TZ).astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+    return datetime.combine(day, at, tzinfo=TZ).astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 # --------------------------------------------------------------------------- contract

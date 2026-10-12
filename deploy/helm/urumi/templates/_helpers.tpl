@@ -86,21 +86,30 @@ tls:
 {{/*
 Annotations shared by every Ingress: the operator's own, the HTTPS-redirect and HSTS Middlewares when TLS
 is on (templates/ingress-tls.yaml), and the cert-manager issuer where requested.
-Usage: include "urumi.ingressAnnotations" (list . true)   # true = request the certificate from this Ingress
+Usage: include "urumi.ingressAnnotations" (list . true (list "gateway-body-limit"))
+  2nd arg: request the certificate from this Ingress; 3rd: extra Middleware component names for this Ingress.
 */}}
 {{- define "urumi.ingressAnnotations" -}}
 {{- $root := index . 0 -}}
 {{- $withIssuer := index . 1 -}}
+{{- $middlewares := list -}}
+{{- if $root.Values.ingress.tls.enabled -}}
+{{- $middlewares = append $middlewares "redirect-https" -}}
+{{- $middlewares = append $middlewares "hsts" -}}
+{{- end -}}
+{{- range $extra := index . 2 -}}{{- $middlewares = append $middlewares $extra -}}{{- end -}}
+{{- $refs := list -}}
+{{- range $name := $middlewares -}}
+{{- $refs = append $refs (printf "%s-%s@kubernetescrd" $root.Release.Namespace (include "urumi.componentName" (list $root $name))) -}}
+{{- end -}}
 {{- with $root.Values.ingress.annotations }}
 {{- toYaml . }}
 {{- end }}
-{{- if $root.Values.ingress.tls.enabled }}
-{{- $redirect := include "urumi.componentName" (list $root "redirect-https") }}
-{{- $hsts := include "urumi.componentName" (list $root "hsts") }}
-traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s-%s@kubernetescrd,%s-%s@kubernetescrd" $root.Release.Namespace $redirect $root.Release.Namespace $hsts | quote }}
-{{- if and $withIssuer $root.Values.ingress.tls.clusterIssuer }}
-cert-manager.io/cluster-issuer: {{ $root.Values.ingress.tls.clusterIssuer | quote }}
+{{- if $refs }}
+traefik.ingress.kubernetes.io/router.middlewares: {{ join "," $refs | quote }}
 {{- end }}
+{{- if and $withIssuer $root.Values.ingress.tls.enabled $root.Values.ingress.tls.clusterIssuer }}
+cert-manager.io/cluster-issuer: {{ $root.Values.ingress.tls.clusterIssuer | quote }}
 {{- end }}
 {{- end -}}
 

@@ -20,7 +20,7 @@ gateway: authenticate key → Caller(A)
 ```
 
 The response lists every call (server, tool, arguments, ok/error, duration), and the UI shows them as expandable
-chips above the answer. The audit log records them under the user with channel `chat` ("assistant").
+chips above the answer, with the message's token usage next to the model name. The audit log records them under the user with channel `chat` ("assistant").
 
 ## Why it is built this way
 

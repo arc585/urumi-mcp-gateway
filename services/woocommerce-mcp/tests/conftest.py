@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from fake_woocommerce import CONSUMER_KEY, CONSUMER_SECRET
 
 HERE = Path(__file__).parent

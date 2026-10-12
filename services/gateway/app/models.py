@@ -1,6 +1,6 @@
 """Relational model: team members, their API keys, upstream MCP servers, and audit records."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -14,7 +14,7 @@ def new_id() -> str:
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class User(Base):

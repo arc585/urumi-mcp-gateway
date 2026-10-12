@@ -54,7 +54,7 @@ export default function Assistant({ me, call }) {
         method: 'POST',
         body: { messages: history.slice(-HISTORY_TURNS).map((m) => ({ role: m.role, content: m.text })) },
       });
-      setMessages((items) => [...items, { role: 'assistant', text: result.reply, calls: result.tool_calls, model: result.model }]);
+      setMessages((items) => [...items, { role: 'assistant', text: result.reply, calls: result.tool_calls, model: result.model, usage: result.usage }]);
     } catch (err) {
       setMessages((items) => [...items, { role: 'assistant', text: err.message, calls: [], failed: true }]);
     } finally {
@@ -100,7 +100,11 @@ export default function Assistant({ me, call }) {
               <div className="message-body">
                 <div className="message-author">
                   {message.role === 'user' ? 'You' : 'Urumi assistant'}
-                  {message.model && <span className="subtle-count"> · {message.model}</span>}
+                  {message.model && (
+                    <span className="subtle-count">
+                      {' · '}{message.model}{message.usage?.total_tokens ? ` · ${message.usage.total_tokens} tokens` : ''}
+                    </span>
+                  )}
                 </div>
                 {message.calls?.length > 0 && (
                   <div className="tool-calls">

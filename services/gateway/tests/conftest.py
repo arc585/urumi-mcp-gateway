@@ -16,6 +16,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "services" / "gateway"))  # `from app... import` in unit tests
 SHIPPING_TOKEN = "test-shipping-token"
 ADMIN_KEY = "urm_test_bootstrap_admin_key_0123456789abcdef"
 
@@ -109,6 +110,9 @@ def stack(tmp_path_factory):
             "DEFAULT_ADMIN_ONLY_TOOLS": json.dumps({"store-info": ["list_store_info_topics"]}),
             "RATE_LIMIT_TOOL_CALLS_PER_MINUTE": "25",
             "RATE_LIMIT_CHAT_MESSAGES_PER_MINUTE": "3",
+            # Audit retention: prune rows older than a day, checking every second (tests insert an old row).
+            "AUDIT_RETENTION_DAYS": "1",
+            "AUDIT_PRUNE_INTERVAL_SECONDS": "1",
         }
         log = tmp / "gateway.log"
         proc = _start("app.main:app", ROOT / "services" / "gateway", ports["gateway"], gateway_env, log)
@@ -120,6 +124,9 @@ def stack(tmp_path_factory):
             "shipping_direct": url("shipping"),
             "admin_key": ADMIN_KEY,
             "gateway_log": log,
+            "gateway_env": gateway_env,
+            "db_path": tmp / "gateway.db",
+            "tmp": tmp,
         }
     finally:
         for proc in procs:

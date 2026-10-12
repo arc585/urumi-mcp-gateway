@@ -7,6 +7,7 @@ both offer a tool called "search" without colliding.
 """
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -30,6 +31,10 @@ from .upstream_client import UpstreamError, UpstreamTarget, call_tool, discover_
 
 SEPARATOR = "__"
 MAX_DESCRIPTION_CHARS = 2000
+# Some MCP clients refuse tool names longer than this (Claude prepends its own "mcp__<server>__" too).
+MAX_PUBLIC_NAME_CHARS = 64
+_warned_names: set[str] = set()
+log = logging.getLogger("urumi.gateway.mcp")
 
 
 def public_name(upstream_id: str, tool_name: str) -> str:
@@ -72,9 +77,14 @@ async def list_tools_for(caller: Caller) -> list[Tool]:
             if (target.id, remote.name) in restricted:
                 continue
             description = f"[{target.name}] {remote.description or remote.name}"[:MAX_DESCRIPTION_CHARS]
+            name = public_name(target.id, remote.name)
+            if len(name) > MAX_PUBLIC_NAME_CHARS and name not in _warned_names:
+                _warned_names.add(name)
+                log.warning("Tool name %r is %d characters; some MCP clients refuse names over %d",
+                            name, len(name), MAX_PUBLIC_NAME_CHARS)
             tools.append(
                 Tool(
-                    name=public_name(target.id, remote.name),
+                    name=name,
                     title=f"{target.name}: {remote.title or remote.name}",
                     description=description,
                     input_schema=remote.input_schema,

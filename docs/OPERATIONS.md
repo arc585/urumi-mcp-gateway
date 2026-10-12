@@ -113,6 +113,12 @@ Restore (example, store DB): `kubectl -n urumi exec -i urumi-mariadb-0 -- sh -c 
 | `api-key-pepper` | change + restart gateway | **invalidates every member key** (all hashes change) — re-issue keys |
 | `upstream-encryption-key` | not supported in place (would need re-encryption with the old and new key, e.g. MultiFernet) | documented limit |
 
+## Audit log retention
+
+Tool-call rows older than `gateway.auditRetentionDays` (90) are deleted every hour by the gateway (log line
+"Pruned N tool-audit rows"); admin events are never pruned. Set it to 0 to keep everything, and rely on the nightly
+`gateway-*.sql.gz` dumps for history beyond the window.
+
 ## Everyday troubleshooting
 
 ```sh
