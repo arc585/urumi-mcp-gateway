@@ -83,9 +83,8 @@ jobs:
           push: true
           tags: ghcr.io/${{ steps.tag.outputs.owner }}/${{ matrix.name }}:${{ steps.tag.outputs.version }}
       - name: Scan the pushed image for known vulnerabilities (report only)
-        uses: aquasecurity/trivy-action@0.28.0
         continue-on-error: true
-        with:
-          image-ref: ghcr.io/${{ steps.tag.outputs.owner }}/${{ matrix.name }}:${{ steps.tag.outputs.version }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$HOME/bin"
+          "$HOME/bin/trivy" image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 \
+            "ghcr.io/${{ steps.tag.outputs.owner }}/${{ matrix.name }}:${{ steps.tag.outputs.version }}"
