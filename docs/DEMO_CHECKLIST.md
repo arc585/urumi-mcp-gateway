@@ -15,10 +15,11 @@ Automated equivalent (same checks via API/MCP/kubectl, PASS/FAIL per step, clean
 | | Do | Expect |
 |---|---|---|
 | a | Docker Desktop running; `docker start urumi-control-plane` if the cluster was stopped | |
-| b | `.venv/bin/python scripts/verify_dod.py --preflight` | 5/5 PASS (Pods ready, storefront, dashboard, `/mcp` rejects no-key, 3 upstreams Connected) |
-| c | Admin key (prints in **your** terminal only): `kubectl -n urumi get secret urumi-gateway -o jsonpath='{.data.bootstrap-admin-key}' \| base64 -d; echo` | `urm_…` |
-| d | WordPress admin password: `kubectl -n urumi get secret urumi-store -o jsonpath='{.data.wordpress-admin-password}' \| base64 -d; echo` | |
-| e | Windows: **A** = normal browser window (dashboard), **Shopper** = private window (storefront), **B** = Claude Code desktop, plus a terminal | |
+| b | `kubectl -n urumi delete pod --field-selector=status.phase==Failed` | Clears Pods left by a backup retry (the nightly CronJob retries once; a failed first attempt stays for its log and would fail the next check) |
+| c | `.venv/bin/python scripts/verify_dod.py --preflight` | 5/5 PASS (Pods ready, storefront, dashboard, `/mcp` rejects no-key, 3 upstreams Connected) |
+| d | Admin key (prints in **your** terminal only): `kubectl -n urumi get secret urumi-gateway -o jsonpath='{.data.bootstrap-admin-key}' \| base64 -d; echo` | `urm_…` |
+| e | WordPress admin password: `kubectl -n urumi get secret urumi-store -o jsonpath='{.data.wordpress-admin-password}' \| base64 -d; echo` | |
+| f | Windows: **A** = normal browser window (dashboard), **Shopper** = private window (storefront), **B** = Claude Code desktop, plus a terminal | |
 
 Gemini free tier allows only a few requests per minute: leave ~30–60 s between assistant prompts.
 
