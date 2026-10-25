@@ -165,7 +165,7 @@ def _client() -> tuple[AsyncOpenAI, list[str]]:
 
 
 async def _first_completion(client: AsyncOpenAI, models: list[str], **request: Any) -> tuple[Any, str]:
-    """First model call of a message: if a model is out of quota (429), try the next one.
+    """First model call of a message: if a model is out of quota (429) or overloaded (503), try the next one.
 
     Only the first call may switch models: later rounds must stay on the model that produced the
     tool calls (Gemini signs them, and another model would not accept those signatures).
@@ -174,7 +174,7 @@ async def _first_completion(client: AsyncOpenAI, models: list[str], **request: A
         try:
             return await client.chat.completions.create(model=model, **request), model
         except APIStatusError as exc:
-            if exc.status_code != 429 or index == len(models) - 1:
+            if exc.status_code not in (429, 503) or index == len(models) - 1:
                 raise
     raise RuntimeError("no model configured")
 
