@@ -116,11 +116,15 @@ with a mount-only init Job on first install so the volume binds and `helm --wait
 WaitForFirstConsumer storage classes (`docs/OPERATIONS.md`). The backup Pod can reach only the two databases,
 runs as the database images' own users with every capability dropped, and mounts the WordPress volume read-only.
 
-## 8. Request body limit at the ingress
+## 8. Request body limit
 
-`gateway.maxRequestBodyBytes` (1 MiB) renders a Traefik `buffering` Middleware attached to the gateway Ingress, so
-oversized bodies are refused with 413 before they reach the gateway (tool arguments and chat messages are a few
-KB). Verified live: a 2 MB POST to `/mcp` is refused; normal calls are unaffected.
+`gateway.maxRequestBodyBytes` (1 MiB) is enforced by the gateway itself: an ASGI middleware reads the body up to
+the limit and answers 413 beyond it (tool arguments and chat messages are a few KB). It was first done with a
+Traefik `buffering` Middleware on the Ingress, which broke external MCP clients: buffering holds a response until
+it is complete, and Claude Code keeps a long-lived GET stream open on `/mcp` for server messages, so the client
+dropped the server after its first call (found during the demo rehearsal; the Python client never opens that
+stream, which is why the automated checks passed). Lesson: proxy middlewares that buffer are incompatible with
+streaming endpoints. Tested: a 2 MiB POST → 413, normal requests unaffected.
 
 ## 9. Audit retention and token usage
 

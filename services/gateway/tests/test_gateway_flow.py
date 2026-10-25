@@ -57,6 +57,15 @@ def test_mcp_requires_a_valid_key(stack):
     assert response.headers["www-authenticate"].startswith("Bearer")
 
 
+def test_oversized_request_bodies_are_refused(stack):
+    """A 2 MiB POST is refused with 413 by the gateway itself; normal requests are unaffected."""
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+               "Authorization": f"Bearer {stack['admin_key']}"}
+    big = b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"pad":"' + b"x" * (2 * 1024 * 1024) + b'"}}'
+    assert httpx.post(stack["mcp"], content=big, headers=headers).status_code == 413
+    assert httpx.post(stack["mcp"], json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers).status_code == 200
+
+
 # --------------------------------------------------------------------------- aggregation and isolation
 
 

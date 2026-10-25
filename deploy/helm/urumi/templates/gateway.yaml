@@ -119,6 +119,8 @@ spec:
               value: {{ $gw.toolPolicies.adminOnly | toJson | quote }}
             - name: AUDIT_RETENTION_DAYS
               value: {{ $gw.auditRetentionDays | quote }}
+            - name: MAX_REQUEST_BODY_BYTES
+              value: {{ $gw.maxRequestBodyBytes | quote }}
             - name: RATE_LIMIT_TOOL_CALLS_PER_MINUTE
               value: {{ $gw.rateLimits.toolCallsPerMinute | quote }}
             - name: RATE_LIMIT_CHAT_MESSAGES_PER_MINUTE
@@ -190,8 +192,7 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
-  {{- $extra := ternary (list "gateway-body-limit") (list) (gt (int $gw.maxRequestBodyBytes) 0) }}
-  {{- with (include "urumi.ingressAnnotations" (list . true $extra)) }}
+  {{- with (include "urumi.ingressAnnotations" (list . true (list))) }}
   annotations:
     {{- . | nindent 4 }}
   {{- end }}
@@ -211,20 +212,6 @@ spec:
                 port:
                   name: http
           {{- end }}
-{{- if gt (int $gw.maxRequestBodyBytes) 0 }}
----
-# Traefik rejects request bodies above the limit with 413 before they reach the gateway.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: {{ include "urumi.componentName" (list . "gateway-body-limit") }}
-  labels:
-    {{- include "urumi.labels" (list . "gateway") | nindent 4 }}
-spec:
-  buffering:
-    maxRequestBodyBytes: {{ int $gw.maxRequestBodyBytes }}
-    memRequestBodyBytes: {{ int $gw.maxRequestBodyBytes }}
-{{- end }}
 {{- if .Values.networkPolicies.enabled }}
 ---
 # The gateway accepts traffic only via the ingress controller.

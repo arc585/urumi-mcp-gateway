@@ -183,6 +183,58 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576"))
+
+
+class MaxBodyMiddleware:
+    """Refuse request bodies above MAX_REQUEST_BODY_BYTES with 413 (0 disables the limit).
+
+    Enforced here and not with a Traefik "buffering" middleware: buffering holds a response until it
+    is complete, which breaks the long-lived GET stream MCP clients such as Claude Code keep open on
+    /mcp for server messages (found live: the client dropped the server after its first call).
+    The body is read up to the limit and replayed to the application, so chunked requests without a
+    Content-Length are limited too.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "http" or MAX_REQUEST_BODY_BYTES <= 0:
+            await self.app(scope, receive, send)
+            return
+        too_large = JSONResponse({"detail": f"request body too large (limit {MAX_REQUEST_BODY_BYTES} bytes)"}, status_code=413)
+        declared = dict(scope.get("headers") or []).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > MAX_REQUEST_BODY_BYTES:
+            await too_large(scope, receive, send)
+            return
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return  # client went away before sending a body
+            chunk = message.get("body", b"")
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_REQUEST_BODY_BYTES:
+                await too_large(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        replayed = False
+
+        async def replay() -> dict[str, Any]:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()  # afterwards: disconnect notifications, as usual
+
+        await self.app(scope, replay, send)
+
+
 allowed_hosts = _csv("MCP_ALLOWED_HOSTS", "localhost:*,127.0.0.1:*")
 allowed_origins = _csv("MCP_ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*")
 
@@ -199,7 +251,7 @@ app = FastAPI(
     description="One authenticated MCP endpoint for a team's MCP servers, plus the dashboard API.",
     version=os.getenv("APP_VERSION", "dev"),
     lifespan=lifespan,
-    middleware=[Middleware(MCPAuthMiddleware)],
+    middleware=[Middleware(MaxBodyMiddleware), Middleware(MCPAuthMiddleware)],
 )
 # Browser-based MCP clients (e.g. MCP Inspector in direct mode) need CORS; the dashboard is same-origin.
 app.add_middleware(

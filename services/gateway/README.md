@@ -33,6 +33,7 @@ Admin: `GET|POST /users`, `PATCH /users/{id}`, `GET|POST /users/{id}/keys`, `POS
 | `UPSTREAM_*_SECONDS` | values | discovery / call / connect timeouts, tool cache |
 | `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS` | chart | DNS-rebinding protection, CORS for browser MCP clients |
 | `AUDIT_RETENTION_DAYS` | values | delete tool-call audit rows older than this, hourly (0 keeps everything) |
+| `MAX_REQUEST_BODY_BYTES` | values | refuse larger request bodies with 413 (0 disables) |
 | `UPSTREAM_URL_CHECK_CACHE_SECONDS` | default 60 | how long a URL's passing SSRF verdict is reused |
 
 ## Tests

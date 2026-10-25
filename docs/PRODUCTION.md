@@ -63,8 +63,8 @@ Preferred: push a version tag; the CI workflow (`.github/workflows/ci.yml`) runs
 multi-arch (amd64 + arm64) images:
 
 ```sh
-git tag v0.8.3 && git push origin v0.8.3
-# → ghcr.io/<you>/urumi-gateway:0.8.3, urumi-woocommerce-mcp, urumi-demo-mcp, urumi-dashboard
+git tag v0.8.4 && git push origin v0.8.4
+# → ghcr.io/<you>/urumi-gateway:0.8.4, urumi-woocommerce-mcp, urumi-demo-mcp, urumi-dashboard
 ```
 
 Make the four packages public on GitHub (Packages → Package settings → Change visibility), or keep them private
@@ -79,7 +79,7 @@ read -s "GHCR_TOKEN?GHCR token (read:packages): " && kubectl -n urumi create sec
 Manual alternative from the Mac (Apple Silicon builds arm64 by default; most VPSs are amd64):
 
 ```sh
-docker buildx build --platform linux/amd64 -f services/gateway/Dockerfile -t ghcr.io/<you>/urumi-gateway:0.8.3 --push .
+docker buildx build --platform linux/amd64 -f services/gateway/Dockerfile -t ghcr.io/<you>/urumi-gateway:0.8.4 --push .
 ```
 
 ## 5. Create the Secrets (on the cluster, never in Git)

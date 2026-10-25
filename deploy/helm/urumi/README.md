@@ -13,7 +13,7 @@ upgrades), or production points at Secrets you created (`*.existingSecret`).
 | `gateway.yaml`, `gateway-secret.yaml`, `postgres.yaml` | Gateway Deployment/Service/Ingress (`/api`, `/mcp`), generated Secret, Postgres StatefulSet |
 | `dashboard.yaml` | nginx Deployment/Service/Ingress (`/`) on the gateway host |
 | `networkpolicy-default-deny.yaml`, `store-networkpolicy.yaml` | Deny-by-default in both directions plus per-component allows; ACME solver allow when TLS is on |
-| `ingress-tls.yaml` | Traefik Middlewares for TLS deployments: HTTP→HTTPS redirect and HSTS |
+| `ingress-tls.yaml` | Traefik Middlewares for TLS deployments: HTTP→HTTPS redirect and HSTS (no buffering middlewares: they break MCP's streaming GET) |
 | `backup.yaml` | Backups PVC; nightly CronJob and a pre-upgrade/pre-rollback hook Job sharing one Pod spec (`pg_dump`, `mariadb-dump`, `wp-content` archive, pruned after `backups.keepDays`); mount-only init Job on first install |
 | `_helpers.tpl` | Names, labels, public URLs, Secret lookup, shared Ingress annotations |
 
