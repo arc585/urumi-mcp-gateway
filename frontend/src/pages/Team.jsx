@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Blank, KeyReveal, Modal, PageHeading, Panel, StatusBadge, formatAgo } from '../components.jsx';
 
 function KeysModal({ user, call, onClose, onChanged, fail }) {
@@ -85,6 +85,7 @@ export default function Team({ me, call, notify, fail }) {
   const [users, setUsers] = useState([]);
   const [revealed, setRevealed] = useState(null);
   const [keysFor, setKeysFor] = useState(null);
+  const revealRef = useRef(null); // the new key is shown next to the invite form, where the admin is looking
 
   const load = useCallback(() => call('/users').then(setUsers).catch((err) => fail(err.message)), [call, fail]);
   useEffect(() => {
@@ -109,6 +110,7 @@ export default function Team({ me, call, notify, fail }) {
       const created = await call('/users', { method: 'POST', body: data });
       setRevealed({ key: created.api_key, owner: created.display_name });
       form.reset();
+      setTimeout(() => revealRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
       notify(`${created.display_name} invited. Copy their key now.`);
       await load();
     } catch (err) {
@@ -131,7 +133,6 @@ export default function Team({ me, call, notify, fail }) {
         title="Team access"
         description="Each teammate gets personal API keys. Revoking a key blocks its very next request."
       />
-      {revealed && <KeyReveal apiKey={revealed.key} owner={revealed.owner} onClose={() => setRevealed(null)} />}
       <Panel
         title="Workspace members"
         description="Admins manage servers and people; members use tools and manage their own keys."
@@ -212,6 +213,9 @@ export default function Team({ me, call, notify, fail }) {
         description="Creates their account and first API key. Share the key through a private channel."
         aside={<span className="form-step">INVITE</span>}
       >
+        <div ref={revealRef}>
+          {revealed && <KeyReveal apiKey={revealed.key} owner={revealed.owner} onClose={() => setRevealed(null)} />}
+        </div>
         <form className="form-grid" onSubmit={invite}>
           <label>
             Full name
