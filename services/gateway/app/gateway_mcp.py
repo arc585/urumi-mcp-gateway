@@ -218,6 +218,15 @@ class MCPAuthMiddleware:
         if scope["type"] != "http" or not scope.get("path", "").startswith("/mcp") or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
+        if scope.get("method") == "GET":
+            # Stateless server: there are no server-initiated messages, so there is no SSE stream to
+            # offer. The spec lets a server answer 405 here, and clients then rely on POST alone. Leaving
+            # the SDK's default (an empty stream kept open forever) made clients hold a silent
+            # connection that proxies eventually cut, after which Claude Code dropped the server.
+            response = JSONResponse({"detail": "This server does not offer a standalone SSE stream"}, status_code=405,
+                                    headers={"Allow": "POST, OPTIONS"})
+            await response(scope, receive, send)
+            return
         headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
         raw_key = extract_key(headers)
         caller = await authenticate(raw_key)

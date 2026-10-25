@@ -66,6 +66,12 @@ def test_oversized_request_bodies_are_refused(stack):
     assert httpx.post(stack["mcp"], json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers).status_code == 200
 
 
+def test_get_on_mcp_is_405_so_clients_do_not_hold_a_stream(stack):
+    """Stateless server: no server-initiated messages, so no SSE stream. 405 tells clients to use POST only."""
+    response = httpx.get(stack["mcp"], headers={"Accept": "text/event-stream", "Authorization": f"Bearer {stack['admin_key']}"})
+    assert response.status_code == 405 and "POST" in response.headers.get("allow", "")
+
+
 # --------------------------------------------------------------------------- aggregation and isolation
 
 

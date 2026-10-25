@@ -126,6 +126,13 @@ dropped the server after its first call (found during the demo rehearsal; the Py
 stream, which is why the automated checks passed). Lesson: proxy middlewares that buffer are incompatible with
 streaming endpoints. Tested: a 2 MiB POST → 413, normal requests unaffected.
 
+The deeper cause, found the same day: the SDK answers a GET on `/mcp` by opening a server-sent-events stream and
+holding it open forever with nothing on it, even in stateless mode where no server-initiated message can ever
+arrive. Clients such as Claude Code open that stream and keep it; a silent connection is exactly what proxies and
+port mappings eventually cut, and the client treated the cut as the server going away and dropped its tools
+mid-session (every gateway restart did the same). A stateless server has no stream to offer, so the gateway now
+answers 405 to that GET, which the MCP specification allows and clients handle by using POST alone. Tested.
+
 ## 9. Audit retention and token usage
 
 Tool-call audit rows older than `gateway.auditRetentionDays` (90) are deleted hourly by the gateway itself; admin
