@@ -112,6 +112,7 @@ def stack(tmp_path_factory):
             "RATE_LIMIT_CHAT_MESSAGES_PER_MINUTE": "3",
             # Audit retention: prune rows older than a day, checking every second (tests insert an old row).
             "AUDIT_RETENTION_DAYS": "1",
+            "MCP_GET_KEEPALIVE_SECONDS": "1",
             "AUDIT_PRUNE_INTERVAL_SECONDS": "1",
         }
         log = tmp / "gateway.log"

@@ -7,7 +7,9 @@ both offer a tool called "search" without colliding.
 """
 
 import asyncio
+import contextlib
 import logging
+import os
 import time
 from typing import Any
 
@@ -208,6 +210,41 @@ gateway_server = Server(
 )
 
 
+GET_KEEPALIVE_SECONDS = float(os.getenv("MCP_GET_KEEPALIVE_SECONDS", "15"))
+
+
+async def _keepalive_stream(scope: dict[str, Any], receive: Any, send: Any) -> None:
+    """An SSE stream that only carries keep-alive comments, until the client disconnects."""
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [(b"content-type", b"text/event-stream"), (b"cache-control", b"no-cache, no-transform"),
+                    (b"connection", b"keep-alive"), (b"x-accel-buffering", b"no")],
+    })
+    disconnected = asyncio.Event()
+
+    async def watch_disconnect() -> None:
+        while not disconnected.is_set():
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                disconnected.set()
+
+    watcher = asyncio.create_task(watch_disconnect())
+    try:
+        while not disconnected.is_set():
+            await send({"type": "http.response.body", "body": b": keepalive\n\n", "more_body": True})
+            try:
+                await asyncio.wait_for(disconnected.wait(), timeout=GET_KEEPALIVE_SECONDS)
+            except TimeoutError:
+                continue
+    except Exception as exc:  # the client went away mid-send; nothing to clean up
+        log.debug("GET stream ended: %s", exc)
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(Exception):
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
 class MCPAuthMiddleware:
     """Reject unauthenticated /mcp requests with 401 and attach the Caller to authenticated ones."""
 
@@ -218,15 +255,6 @@ class MCPAuthMiddleware:
         if scope["type"] != "http" or not scope.get("path", "").startswith("/mcp") or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
-        if scope.get("method") == "GET":
-            # Stateless server: there are no server-initiated messages, so there is no SSE stream to
-            # offer. The spec lets a server answer 405 here, and clients then rely on POST alone. Leaving
-            # the SDK's default (an empty stream kept open forever) made clients hold a silent
-            # connection that proxies eventually cut, after which Claude Code dropped the server.
-            response = JSONResponse({"detail": "This server does not offer a standalone SSE stream"}, status_code=405,
-                                    headers={"Allow": "POST, OPTIONS"})
-            await response(scope, receive, send)
-            return
         headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
         raw_key = extract_key(headers)
         caller = await authenticate(raw_key)
@@ -236,6 +264,14 @@ class MCPAuthMiddleware:
                 {"detail": detail}, status_code=401, headers={"WWW-Authenticate": 'Bearer realm="urumi-gateway"'}
             )
             await response(scope, receive, send)
+            return
+        if scope.get("method") == "GET":
+            # Clients such as Claude Code open this standalone GET stream after initialize and keep it for
+            # the life of the session. This server is stateless and never pushes a message on it, and the
+            # SDK's default stream is silent forever: proxies and port mappings cut silent connections, and
+            # the client then treats the gateway as gone and drops its tools (seen live). So the gateway
+            # serves the stream itself and sends an SSE comment every few seconds to keep it alive.
+            await _keepalive_stream(scope, receive, send)
             return
         scope.setdefault("state", {})["caller"] = caller
         await self.app(scope, receive, send)

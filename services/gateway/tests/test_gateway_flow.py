@@ -66,10 +66,18 @@ def test_oversized_request_bodies_are_refused(stack):
     assert httpx.post(stack["mcp"], json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers).status_code == 200
 
 
-def test_get_on_mcp_is_405_so_clients_do_not_hold_a_stream(stack):
-    """Stateless server: no server-initiated messages, so no SSE stream. 405 tells clients to use POST only."""
-    response = httpx.get(stack["mcp"], headers={"Accept": "text/event-stream", "Authorization": f"Bearer {stack['admin_key']}"})
-    assert response.status_code == 405 and "POST" in response.headers.get("allow", "")
+def test_get_on_mcp_streams_keepalives(stack):
+    """Clients keep a GET stream open for the session; it must stay alive (comments every second in tests)
+    and must still require a key."""
+    assert httpx.get(stack["mcp"], headers={"Accept": "text/event-stream"}).status_code == 401
+    with httpx.stream("GET", stack["mcp"], headers={"Accept": "text/event-stream", "Authorization": f"Bearer {stack['admin_key']}"}, timeout=10) as response:
+        assert response.status_code == 200 and response.headers["content-type"].startswith("text/event-stream")
+        seen = b""
+        for chunk in response.iter_bytes():
+            seen += chunk
+            if seen.count(b": keepalive") >= 2:
+                break
+    assert seen.count(b": keepalive") >= 2
 
 
 # --------------------------------------------------------------------------- aggregation and isolation

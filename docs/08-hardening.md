@@ -130,8 +130,10 @@ The deeper cause, found the same day: the SDK answers a GET on `/mcp` by opening
 holding it open forever with nothing on it, even in stateless mode where no server-initiated message can ever
 arrive. Clients such as Claude Code open that stream and keep it; a silent connection is exactly what proxies and
 port mappings eventually cut, and the client treated the cut as the server going away and dropped its tools
-mid-session (every gateway restart did the same). A stateless server has no stream to offer, so the gateway now
-answers 405 to that GET, which the MCP specification allows and clients handle by using POST alone. Tested.
+mid-session (every gateway restart did the same). The gateway now serves that GET itself: an
+event stream carrying only a keep-alive comment every 15 s, so a client that insists on holding the stream never
+holds a silent one, while the key check still applies. (A 405, which the specification also allows, was tried
+first; some clients treat it as a failure.) Tested.
 
 ## 9. Audit retention and token usage
 
